@@ -12,16 +12,16 @@ const segmentDuration = 6;
 const toneLeadInSeconds = 0.08;
 
 const clips = [
-  { name: "content-1", phrase: "This is chunk 1.", toneHz: 440 },
-  { name: "content-2", phrase: "This is chunk 2.", toneHz: 494 },
-  { name: "content-3", phrase: "This is chunk 3.", toneHz: 523 },
-  { name: "content-4", phrase: "This is chunk 4.", toneHz: 587 },
-  { name: "content-5", phrase: "This is chunk 5.", toneHz: 659 },
-  { name: "content-6", phrase: "This is chunk 6.", toneHz: 698 },
-  { name: "broadcast-ad-1", phrase: "This is broadcast ad 1.", toneHz: 784 },
-  { name: "broadcast-ad-2", phrase: "This is broadcast ad 2.", toneHz: 831 },
-  { name: "interstitial-1", phrase: "This is interstitial ad 1.", toneHz: 880 },
-  { name: "interstitial-2", phrase: "This is interstitial ad 2.", toneHz: 932 }
+  { name: "content-1", phrase: "Chunk 1.", toneHz: 440 },
+  { name: "content-2", phrase: "Chunk 2.", toneHz: 494 },
+  { name: "content-3", phrase: "Chunk 3.", toneHz: 523 },
+  { name: "content-4", phrase: "Chunk 4.", toneHz: 587 },
+  { name: "content-5", phrase: "Chunk 5.", toneHz: 659 },
+  { name: "content-6", phrase: "Chunk 6.", toneHz: 698 },
+  { name: "broadcast-ad-1", phrase: "Broadcast ad 1.", toneHz: 784 },
+  { name: "broadcast-ad-2", phrase: "Broadcast ad 2.", toneHz: 831 },
+  { name: "interstitial-1", phrase: "Interstitial ad 1.", toneHz: 880 },
+  { name: "interstitial-2", phrase: "Interstitial ad 2.", toneHz: 932 }
 ];
 
 function run(command, args) {
