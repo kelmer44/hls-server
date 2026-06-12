@@ -18,12 +18,12 @@ const startedAtMs = Date.now() - segmentDuration * 1000 * 3;
 const loop = [
   { type: "content", file: "content-1.ts" },
   { type: "content", file: "content-2.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad.ts" },
   { type: "content", file: "content-3.ts" },
-  { type: "content", file: "content-4.ts" },
   { type: "broadcast-ad", file: "broadcast-ad.ts" },
+  { type: "content", file: "content-4.ts" },
   { type: "content", file: "content-5.ts" },
-  { type: "content", file: "content-6.ts" }
+  { type: "content", file: "content-6.ts" },
+  { type: "broadcast-ad", file: "broadcast-ad.ts" }
 ];
 
 const mimeTypes = {
