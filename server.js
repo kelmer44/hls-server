@@ -19,11 +19,13 @@ const loop = [
   { type: "content", file: "content-1.ts" },
   { type: "content", file: "content-2.ts" },
   { type: "content", file: "content-3.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad.ts" },
+  { type: "broadcast-ad", file: "broadcast-ad-1.ts", interstitial: "interstitial-1.ts" },
+  { type: "broadcast-ad", file: "broadcast-ad-2.ts", interstitial: "interstitial-2.ts" },
   { type: "content", file: "content-4.ts" },
   { type: "content", file: "content-5.ts" },
   { type: "content", file: "content-6.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad.ts" }
+  { type: "broadcast-ad", file: "broadcast-ad-1.ts", interstitial: "interstitial-1.ts" },
+  { type: "broadcast-ad", file: "broadcast-ad-2.ts", interstitial: "interstitial-2.ts" }
 ];
 
 const mimeTypes = {
@@ -64,8 +66,9 @@ function livePlaylist(baseUrl) {
 
     if (item.type === "broadcast-ad") {
       const id = `broadcast-ad-${sequence}`;
+      const assetUri = `${baseUrl}/interstitial.m3u8?event=${sequence}&asset=${encodeURIComponent(item.interstitial)}`;
       lines.push(
-        `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(startMs)}",DURATION=${formatDuration(segmentDuration)},X-ASSET-URI="${baseUrl}/interstitial.m3u8?event=${sequence}",X-RESUME-OFFSET=${formatDuration(segmentDuration)},X-PLAYOUT-LIMIT=${formatDuration(segmentDuration)}`
+        `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(startMs)}",DURATION=${formatDuration(segmentDuration)},X-ASSET-URI="${quote(assetUri)}",X-RESUME-OFFSET=${formatDuration(segmentDuration)},X-PLAYOUT-LIMIT=${formatDuration(segmentDuration)}`
       );
     }
 
@@ -80,7 +83,7 @@ function livePlaylist(baseUrl) {
   return `${lines.join("\n")}\n`;
 }
 
-function interstitialPlaylist() {
+function interstitialPlaylist(asset = "interstitial-1.ts") {
   return [
     "#EXTM3U",
     "#EXT-X-VERSION:7",
@@ -88,7 +91,7 @@ function interstitialPlaylist() {
     "#EXT-X-MEDIA-SEQUENCE:0",
     "#EXT-X-INDEPENDENT-SEGMENTS",
     `#EXTINF:${formatDuration(segmentDuration)},`,
-    `/media/interstitial.ts?v=${mediaVersion}`,
+    `/media/${asset}?v=${mediaVersion}`,
     "#EXT-X-ENDLIST"
   ].join("\n") + "\n";
 }
@@ -146,12 +149,14 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/interstitial.m3u8") {
+      const asset = url.searchParams.get("asset") || "interstitial-1.ts";
+      const allowedAssets = new Set(["interstitial-1.ts", "interstitial-2.ts"]);
       res.writeHead(200, {
         "Content-Type": mimeTypes[".m3u8"],
         "Cache-Control": "no-store",
         "Access-Control-Allow-Origin": "*"
       });
-      res.end(interstitialPlaylist());
+      res.end(interstitialPlaylist(allowedAssets.has(asset) ? asset : "interstitial-1.ts"));
       return;
     }
 
