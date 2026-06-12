@@ -11,6 +11,8 @@ const publicDir = path.join(__dirname, "public");
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 8765);
 const segmentDuration = 6.037333;
+const adBreakSegments = 2;
+const adBreakDuration = segmentDuration * adBreakSegments;
 const playlistWindow = 8;
 const mediaVersion = process.env.MEDIA_VERSION || Date.now().toString(36);
 const startedAtMs = Date.now() - segmentDuration * 1000 * 3;
@@ -19,13 +21,13 @@ const loop = [
   { type: "content", file: "content-1.ts" },
   { type: "content", file: "content-2.ts" },
   { type: "content", file: "content-3.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad-1.ts", interstitial: "interstitial-1.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad-2.ts", interstitial: "interstitial-2.ts" },
+  { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
+  { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 },
   { type: "content", file: "content-4.ts" },
   { type: "content", file: "content-5.ts" },
   { type: "content", file: "content-6.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad-1.ts", interstitial: "interstitial-1.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad-2.ts", interstitial: "interstitial-2.ts" }
+  { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
+  { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 }
 ];
 
 const mimeTypes = {
@@ -48,6 +50,10 @@ function formatDuration(seconds) {
   return seconds.toFixed(6);
 }
 
+function shouldEmitInterstitial(item, sequence, firstSeq) {
+  return item.type === "broadcast-ad" && (item.adBreakPosition === 0 || sequence === firstSeq);
+}
+
 function livePlaylist(baseUrl) {
   const elapsedSegments = Math.max(0, Math.floor((Date.now() - startedAtMs) / (segmentDuration * 1000)));
   const firstSeq = Math.max(0, elapsedSegments - playlistWindow + 1);
@@ -64,11 +70,13 @@ function livePlaylist(baseUrl) {
     const item = loop[sequence % loop.length];
     const startMs = startedAtMs + sequence * segmentDuration * 1000;
 
-    if (item.type === "broadcast-ad") {
-      const id = `broadcast-ad-${sequence}`;
-      const assetUri = `${baseUrl}/interstitial.m3u8?event=${sequence}&asset=${encodeURIComponent(item.interstitial)}`;
+    if (shouldEmitInterstitial(item, sequence, firstSeq)) {
+      const adBreakStartSequence = sequence - item.adBreakPosition;
+      const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
+      const id = `ad-break-${adBreakStartSequence}`;
+      const assetUri = `${baseUrl}/interstitial.m3u8?event=${adBreakStartSequence}`;
       lines.push(
-        `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(startMs)}",DURATION=${formatDuration(segmentDuration)},X-ASSET-URI="${quote(assetUri)}",X-RESUME-OFFSET=${formatDuration(segmentDuration)},X-PLAYOUT-LIMIT=${formatDuration(segmentDuration)}`
+        `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",DURATION=${formatDuration(adBreakDuration)},X-ASSET-URI="${quote(assetUri)}",X-RESUME-OFFSET=${formatDuration(adBreakDuration)},X-PLAYOUT-LIMIT=${formatDuration(adBreakDuration)}`
       );
     }
 
@@ -83,7 +91,7 @@ function livePlaylist(baseUrl) {
   return `${lines.join("\n")}\n`;
 }
 
-function interstitialPlaylist(asset = "interstitial-1.ts") {
+function interstitialPlaylist() {
   return [
     "#EXTM3U",
     "#EXT-X-VERSION:7",
@@ -91,7 +99,9 @@ function interstitialPlaylist(asset = "interstitial-1.ts") {
     "#EXT-X-MEDIA-SEQUENCE:0",
     "#EXT-X-INDEPENDENT-SEGMENTS",
     `#EXTINF:${formatDuration(segmentDuration)},`,
-    `/media/${asset}?v=${mediaVersion}`,
+    `/media/interstitial-1.ts?v=${mediaVersion}`,
+    `#EXTINF:${formatDuration(segmentDuration)},`,
+    `/media/interstitial-2.ts?v=${mediaVersion}`,
     "#EXT-X-ENDLIST"
   ].join("\n") + "\n";
 }
@@ -149,14 +159,12 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/interstitial.m3u8") {
-      const asset = url.searchParams.get("asset") || "interstitial-1.ts";
-      const allowedAssets = new Set(["interstitial-1.ts", "interstitial-2.ts"]);
       res.writeHead(200, {
         "Content-Type": mimeTypes[".m3u8"],
         "Cache-Control": "no-store",
         "Access-Control-Allow-Origin": "*"
       });
-      res.end(interstitialPlaylist(allowedAssets.has(asset) ? asset : "interstitial-1.ts"));
+      res.end(interstitialPlaylist());
       return;
     }
 
