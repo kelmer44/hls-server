@@ -287,7 +287,8 @@
         font-weight: 760;
       }
 
-      audio {
+      audio,
+      video {
         width: 100%;
         margin: 4px 0 18px;
       }
@@ -459,7 +460,7 @@
         <section class="panel" aria-labelledby="stream-title">
           <div class="panel-inner">
             <h2 id="stream-title">Stream</h2>
-            <audio id="preview-audio" controls src="/live.m3u8"></audio>
+            <audio id="preview-audio" controls></audio>
             <code id="live-url">http://127.0.0.1:8765/live.m3u8</code>
             <div class="stream-actions">
               <p class="timestamp" id="next-ad-time">Next ad break pending</p>
@@ -483,11 +484,20 @@
               <span>Cycle</span>
               <strong id="cycle-duration">--</strong>
             </div>
+            <div class="metric">
+              <span>Player</span>
+              <strong id="player-engine">hls.js</strong>
+            </div>
+            <div class="metric">
+              <span>Interstitial</span>
+              <strong id="interstitial-state">Pending</strong>
+            </div>
           </div>
         </section>
       </div>
     </main>
 
+    <script src="/vendor/hls.min.js"></script>
     <script>
       const form = document.querySelector("#settings-form");
       const status = document.querySelector("#status");
@@ -506,7 +516,9 @@
         nextAdTime: document.querySelector("#next-ad-time"),
         segmentDuration: document.querySelector("#segment-duration"),
         adDuration: document.querySelector("#ad-duration"),
-        cycleDuration: document.querySelector("#cycle-duration")
+        cycleDuration: document.querySelector("#cycle-duration"),
+        playerEngine: document.querySelector("#player-engine"),
+        interstitialState: document.querySelector("#interstitial-state")
       };
       const defaults = {
         adsEnabled: true,
@@ -515,6 +527,8 @@
         playlistWindow: 8
       };
       let currentSettings = defaults;
+      let hls = null;
+      let attemptedErrorRecoveryAt = 0;
 
       function setStatus(message, state = "") {
         status.textContent = message;
@@ -546,8 +560,7 @@
         setForm(settings);
         liveUrl.textContent = settings.liveUrl;
         if (options.reloadAudio) {
-          audio.src = "/live.m3u8";
-          audio.load();
+          reloadHlsSource();
         }
         metrics.segmentDuration.textContent = seconds(settings.segmentDuration);
         metrics.adDuration.textContent = settings.adsEnabled ? seconds(settings.adBreakDuration) : "Triggers off";
@@ -560,6 +573,125 @@
           metrics.nextAd.textContent = "Off";
           metrics.nextAdTime.textContent = "Interstitial ads disabled";
         }
+      }
+
+      function setPlayerState(message, state = "") {
+        metrics.playerEngine.textContent = message;
+        if (state === "error") {
+          setStatus(message, "error");
+        }
+      }
+
+      function setInterstitialState(message) {
+        metrics.interstitialState.textContent = message;
+      }
+
+      function interstitialLabel(data) {
+        const id = data?.event?.identifier || data?.event?.id || data?.event?.dateRange?.id || "interstitial";
+        const asset = data?.asset?.uri || data?.asset?.url || "";
+        return asset ? `${id}: ${asset.split("/").pop()}` : id;
+      }
+
+      function reloadHlsSource() {
+        if (!hls) {
+          return;
+        }
+
+        const shouldResume = !audio.paused && !audio.ended;
+        setInterstitialState("Reloading");
+        hls.loadSource("/live.m3u8");
+        if (shouldResume) {
+          audio.play().catch(() => {
+            setPlayerState(`hls.js ${Hls.version}: press play`);
+          });
+        }
+      }
+
+      function recoverFatalError(data) {
+        const now = Date.now();
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && now - attemptedErrorRecoveryAt > 5000) {
+          attemptedErrorRecoveryAt = now;
+          hls.recoverMediaError();
+          setPlayerState(`hls.js ${Hls.version}: recovering media`);
+          return;
+        }
+
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          hls.startLoad(-1);
+          setPlayerState(`hls.js ${Hls.version}: retrying network`);
+          return;
+        }
+
+        hls.destroy();
+        hls = null;
+        setPlayerState(`hls.js ${Hls.version}: fatal error`, "error");
+      }
+
+      function initHlsPlayer() {
+        if (!window.Hls) {
+          setPlayerState("hls.js failed to load", "error");
+          return;
+        }
+
+        metrics.playerEngine.textContent = `hls.js ${Hls.version}`;
+        if (!Hls.isSupported()) {
+          audio.removeAttribute("src");
+          setPlayerState(`hls.js ${Hls.version}: MSE unsupported`, "error");
+          return;
+        }
+
+        hls = new Hls({
+          enableInterstitialPlayback: true,
+          interstitialLiveLookAhead: 30,
+          liveSyncDurationCount: 3,
+          liveMaxLatencyDurationCount: 5
+        });
+
+        hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+          hls.loadSource("/live.m3u8");
+        });
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setPlayerState(`hls.js ${Hls.version}: ready`);
+        });
+
+        hls.on(Hls.Events.INTERSTITIALS_UPDATED, (event, data) => {
+          const count = data.events?.length || 0;
+          setInterstitialState(count === 1 ? "1 scheduled" : `${count} scheduled`);
+        });
+
+        hls.on(Hls.Events.INTERSTITIAL_STARTED, (event, data) => {
+          setInterstitialState(`Playing ${interstitialLabel(data)}`);
+        });
+
+        hls.on(Hls.Events.INTERSTITIAL_ASSET_STARTED, (event, data) => {
+          setInterstitialState(`Asset ${interstitialLabel(data)}`);
+        });
+
+        hls.on(Hls.Events.INTERSTITIAL_ENDED, () => {
+          setInterstitialState("Returning to primary");
+        });
+
+        hls.on(Hls.Events.INTERSTITIALS_PRIMARY_RESUMED, () => {
+          setInterstitialState("Primary");
+        });
+
+        hls.on(Hls.Events.INTERSTITIAL_ASSET_ERROR, (event, data) => {
+          setInterstitialState(`Asset error: ${data.details || "failed"}`);
+        });
+
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            recoverFatalError(data);
+            return;
+          }
+
+          if (data.details?.startsWith("assetList")) {
+            setInterstitialState(`Asset-list error: ${data.details}`);
+          }
+        });
+
+        hls.attachMedia(audio);
       }
 
       async function loadSettings() {
@@ -615,6 +747,7 @@
         }
       });
 
+      initHlsPlayer();
       refresh();
       window.setInterval(refresh, 5000);
     </script>

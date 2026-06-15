@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
+const hlsDistDir = path.join(__dirname, "node_modules", "hls.js", "dist");
 
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 8765);
@@ -304,6 +305,16 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    if (url.pathname === "/vendor/hls.min.js") {
+      await serveVendorHls(res, "hls.min.js");
+      return;
+    }
+
+    if (url.pathname === "/vendor/hls.min.js.map") {
+      await serveVendorHls(res, "hls.min.js.map");
+      return;
+    }
+
     if (url.pathname === "/interstitial.m3u8") {
       const asset = url.searchParams.get("asset");
       const duration = parseDuration(url.searchParams.get("duration"), segmentDuration);
@@ -345,8 +356,23 @@ const server = createServer(async (req, res) => {
   }
 });
 
+async function serveVendorHls(res, fileName) {
+  const body = await readFile(path.join(hlsDistDir, fileName));
+  res.writeHead(200, {
+    "Content-Type": fileName.endsWith(".map") ? "application/json; charset=utf-8" : mimeTypes[".js"],
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "Access-Control-Allow-Origin": "*"
+  });
+  res.end(body);
+}
+
 if (!existsSync(path.join(publicDir, "media", "content-1.ts"))) {
   console.error("Missing generated media. Run: npm run generate");
+  process.exit(1);
+}
+
+if (!existsSync(path.join(hlsDistDir, "hls.min.js"))) {
+  console.error("Missing hls.js dependency. Run: npm install");
   process.exit(1);
 }
 

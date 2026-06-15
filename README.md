@@ -12,6 +12,7 @@ The main playlist is a sliding live playlist at `/live.m3u8`. It loops content s
 ## Run
 
 ```sh
+npm install
 npm run generate
 npm start
 ```
@@ -42,6 +43,8 @@ The homepage is a settings page for the live stream:
 http://127.0.0.1:8765/
 ```
 
+The homepage player uses the locally installed hls.js bundle instead of native browser HLS playback. This keeps the browser benchmark on hls.js interstitial handling, including `X-ASSET-LIST` playback, and avoids silently falling back to native Safari HLS behavior.
+
 It can change the runtime ad schedule without restarting the process:
 
 - enable or disable HLS interstitial trigger tags
@@ -54,6 +57,7 @@ Saving settings restarts the live schedule so the next trigger time is based on 
 ## Notes
 
 - Media generation uses local `say` and `ffmpeg`.
+- The page serves `hls.js@1.6.16` from `node_modules/hls.js/dist/hls.min.js`.
 - All media is audio-only AAC in MPEG-TS containers.
 - The live playlist advances by wall clock time and keeps an eight-segment window by default, currently about 48.3 seconds.
 - Broadcast ad assets are grouped into one ad break by default, so supported players should replace `broadcast-ad-1.ts` and `broadcast-ad-2.ts` with the `.m3u8` playlists returned by the asset-list endpoint.
