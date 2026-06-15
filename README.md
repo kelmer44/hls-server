@@ -8,6 +8,7 @@ The main playlist is a sliding live playlist at `/live.m3u8`. It loops content s
 - `X-ASSET-LIST` pointing to `/interstitial-assets.json?interstitialId=...&duration=...`, which resolves the ad group into per-asset `.m3u8` playlists for `interstitial-1.ts` and `interstitial-2.ts`
 - `X-RESUME-OFFSET` equal to the two-segment broadcast ad duration
 - `X-PLAYOUT-LIMIT` equal to the two-segment interstitial duration
+- `X-SNAP="OUT,IN"` so interstitial playback snaps out of and back into the primary stream
 
 ## Run
 

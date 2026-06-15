@@ -72,7 +72,7 @@ function interstitialDateRange(baseUrl, adBreakStartSequence) {
   const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
   const id = `ad-break-${adBreakStartSequence}`;
   const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(adBreakDuration)}`;
-  return `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",DURATION=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-RESUME-OFFSET=${formatDuration(adBreakDuration)},X-PLAYOUT-LIMIT=${formatDuration(adBreakDuration)}`;
+  return `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",DURATION=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-RESUME-OFFSET=${formatDuration(adBreakDuration)},X-PLAYOUT-LIMIT=${formatDuration(adBreakDuration)},X-SNAP="OUT,IN"`;
 }
 
 function interstitialStartSequences(firstSeq, elapsedSegments) {
