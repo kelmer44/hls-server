@@ -11,26 +11,21 @@ const publicDir = path.join(__dirname, "public");
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 8765);
 const segmentDuration = 6.037333;
-const adBreakSegments = 2;
-const adBreakDuration = segmentDuration * adBreakSegments;
-const playlistWindow = 8;
+const defaultPlaylistWindow = 8;
 const mediaVersion = process.env.MEDIA_VERSION || Date.now().toString(36);
-const startedAtMs = Date.now() - segmentDuration * 1000 * 3;
+let startedAtMs = Date.now() - segmentDuration * 1000 * 3;
+const contentAssets = [
+  "content-1.ts",
+  "content-2.ts",
+  "content-3.ts",
+  "content-4.ts",
+  "content-5.ts",
+  "content-6.ts"
+];
+const broadcastAdAssets = ["broadcast-ad-1.ts", "broadcast-ad-2.ts"];
 const interstitialAssets = ["interstitial-1.ts", "interstitial-2.ts"];
 const allowedInterstitialAssets = new Set(interstitialAssets);
-
-const loop = [
-  { type: "content", file: "content-1.ts" },
-  { type: "content", file: "content-2.ts" },
-  { type: "content", file: "content-3.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
-  { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 },
-  { type: "content", file: "content-4.ts" },
-  { type: "content", file: "content-5.ts" },
-  { type: "content", file: "content-6.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
-  { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 }
-];
+let adSettings = normalizeAdSettings();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -54,7 +49,100 @@ function formatDuration(seconds) {
 }
 
 function shouldEmitInterstitial(item, sequence, firstSeq) {
-  return item.type === "broadcast-ad" && (item.adBreakPosition === 0 || sequence === firstSeq);
+  return adSettings.adsEnabled && item.type === "broadcast-ad" && (item.adBreakPosition === 0 || sequence === firstSeq);
+}
+
+function clampInteger(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.round(number)));
+}
+
+function normalizeAdSettings(input = {}) {
+  return {
+    adsEnabled: input.adsEnabled !== false,
+    contentSegmentsBeforeAd: clampInteger(input.contentSegmentsBeforeAd, 3, 1, 24),
+    adSegmentsPerBreak: clampInteger(input.adSegmentsPerBreak, 2, 1, broadcastAdAssets.length),
+    playlistWindow: clampInteger(input.playlistWindow, defaultPlaylistWindow, 3, 30)
+  };
+}
+
+function resetSchedule() {
+  startedAtMs = Date.now() - segmentDuration * 1000 * Math.min(3, adSettings.playlistWindow - 1);
+}
+
+function adBreakDuration() {
+  return segmentDuration * adSettings.adSegmentsPerBreak;
+}
+
+function cycleLength() {
+  return adSettings.contentSegmentsBeforeAd + adSettings.adSegmentsPerBreak;
+}
+
+function itemAtSequence(sequence) {
+  const position = sequence % cycleLength();
+  if (position < adSettings.contentSegmentsBeforeAd) {
+    const cycleIndex = Math.floor(sequence / cycleLength());
+    const contentIndex = cycleIndex * adSettings.contentSegmentsBeforeAd + position;
+    return {
+      type: "content",
+      file: contentAssets[contentIndex % contentAssets.length]
+    };
+  }
+
+  const adBreakPosition = position - adSettings.contentSegmentsBeforeAd;
+  return {
+    type: "broadcast-ad",
+    file: broadcastAdAssets[adBreakPosition % broadcastAdAssets.length],
+    adBreakPosition
+  };
+}
+
+function nextAdBreakInfo(nowMs = Date.now()) {
+  if (!adSettings.adsEnabled) {
+    return null;
+  }
+
+  const elapsedSegments = Math.max(0, Math.floor((nowMs - startedAtMs) / (segmentDuration * 1000)));
+  const position = elapsedSegments % cycleLength();
+  const segmentsUntilBreak = position < adSettings.contentSegmentsBeforeAd
+    ? adSettings.contentSegmentsBeforeAd - position
+    : 0;
+  const sequence = elapsedSegments + segmentsUntilBreak;
+  const startsAtMs = startedAtMs + sequence * segmentDuration * 1000;
+
+  return {
+    sequence,
+    startsAt: isoAt(startsAtMs),
+    secondsUntil: Math.max(0, Number(((startsAtMs - nowMs) / 1000).toFixed(3)))
+  };
+}
+
+function settingsResponse(req) {
+  const baseUrl = requestBaseUrl(req);
+  return {
+    ...adSettings,
+    segmentDuration: Number(formatDuration(segmentDuration)),
+    adBreakDuration: Number(formatDuration(adBreakDuration())),
+    cycleDuration: Number(formatDuration(segmentDuration * cycleLength())),
+    liveUrl: `${baseUrl}/live.m3u8`,
+    nextAdBreak: nextAdBreakInfo()
+  };
+}
+
+async function readJsonBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(chunk);
+  }
+
+  if (chunks.length === 0) {
+    return {};
+  }
+
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
 function parseDuration(value, fallback) {
@@ -64,7 +152,7 @@ function parseDuration(value, fallback) {
 
 function livePlaylist(baseUrl) {
   const elapsedSegments = Math.max(0, Math.floor((Date.now() - startedAtMs) / (segmentDuration * 1000)));
-  const firstSeq = Math.max(0, elapsedSegments - playlistWindow + 1);
+  const firstSeq = Math.max(0, elapsedSegments - adSettings.playlistWindow + 1);
   const lines = [
     "#EXTM3U",
     "#EXT-X-VERSION:7",
@@ -75,16 +163,17 @@ function livePlaylist(baseUrl) {
   ];
 
   for (let sequence = firstSeq; sequence <= elapsedSegments; sequence += 1) {
-    const item = loop[sequence % loop.length];
+    const item = itemAtSequence(sequence);
     const startMs = startedAtMs + sequence * segmentDuration * 1000;
 
     if (shouldEmitInterstitial(item, sequence, firstSeq)) {
       const adBreakStartSequence = sequence - item.adBreakPosition;
       const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
       const id = `ad-break-${adBreakStartSequence}`;
-      const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(adBreakDuration)}`;
+      const duration = adBreakDuration();
+      const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(duration)}`;
       lines.push(
-        `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",DURATION=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-RESUME-OFFSET=${formatDuration(adBreakDuration)},X-PLAYOUT-LIMIT=${formatDuration(adBreakDuration)}`
+        `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",DURATION=${formatDuration(duration)},X-ASSET-LIST="${quote(assetListUri)}",X-RESUME-OFFSET=${formatDuration(duration)},X-PLAYOUT-LIMIT=${formatDuration(duration)}`
       );
     }
 
@@ -190,6 +279,31 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/settings") {
+      if (req.method === "GET") {
+        res.writeHead(200, {
+          "Content-Type": mimeTypes[".json"],
+          "Cache-Control": "no-store",
+          "Access-Control-Allow-Origin": "*"
+        });
+        res.end(`${JSON.stringify(settingsResponse(req), null, 2)}\n`);
+        return;
+      }
+
+      if (req.method === "POST") {
+        const body = await readJsonBody(req);
+        adSettings = normalizeAdSettings(body);
+        resetSchedule();
+        res.writeHead(200, {
+          "Content-Type": mimeTypes[".json"],
+          "Cache-Control": "no-store",
+          "Access-Control-Allow-Origin": "*"
+        });
+        res.end(`${JSON.stringify(settingsResponse(req), null, 2)}\n`);
+        return;
+      }
+    }
+
     if (url.pathname === "/interstitial.m3u8") {
       const asset = url.searchParams.get("asset");
       const duration = parseDuration(url.searchParams.get("duration"), segmentDuration);
@@ -204,7 +318,7 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/interstitial-assets.json") {
       const interstitialId = url.searchParams.get("interstitialId") || "ad-break";
-      const duration = parseDuration(url.searchParams.get("duration"), adBreakDuration);
+      const duration = parseDuration(url.searchParams.get("duration"), adBreakDuration());
       res.writeHead(200, {
         "Content-Type": mimeTypes[".json"],
         "Cache-Control": "no-store",

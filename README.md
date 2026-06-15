@@ -36,16 +36,25 @@ Example:
 http://192.168.68.128:8765/live.m3u8
 ```
 
-There is also a minimal preview page:
+The homepage is a settings page for the live stream:
 
 ```text
 http://127.0.0.1:8765/
 ```
 
+It can change the runtime ad schedule without restarting the process:
+
+- enable or disable HLS interstitial trigger tags
+- choose how many content segments play before each ad break
+- choose whether each ad break uses one or two broadcast ad segments
+- change the live playlist window size
+
+Saving settings restarts the live schedule so the next trigger time is based on the new cadence. The same settings are available as JSON at `/settings`.
+
 ## Notes
 
 - Media generation uses local `say` and `ffmpeg`.
 - All media is audio-only AAC in MPEG-TS containers.
-- The live playlist advances by wall clock time and keeps an eight-segment window, currently about 48.3 seconds.
-- Broadcast ad assets are grouped into one ad break, so supported players should replace `broadcast-ad-1.ts` and `broadcast-ad-2.ts` with the `.m3u8` playlists returned by the asset-list endpoint.
+- The live playlist advances by wall clock time and keeps an eight-segment window by default, currently about 48.3 seconds.
+- Broadcast ad assets are grouped into one ad break by default, so supported players should replace `broadcast-ad-1.ts` and `broadcast-ad-2.ts` with the `.m3u8` playlists returned by the asset-list endpoint.
 - Generated segments speak their chunk name first, then use a unique sine tone for the rest of the chunk.
