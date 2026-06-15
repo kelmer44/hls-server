@@ -5,7 +5,7 @@ This is a small local prototype for an audio-only live HLS stream that schedules
 The main playlist is a sliding live playlist at `/live.m3u8`. It loops content segments and inserts two broadcast ad segments in a row at each ad break: `broadcast-ad-1.ts` followed by `broadcast-ad-2.ts`. Whenever an ad break enters the playlist, the server emits one `EXT-X-DATERANGE` tag for the whole ad group with:
 
 - `CLASS="com.apple.hls.interstitial"`
-- `X-ASSET-URI` pointing to `/interstitial.m3u8`, which contains `interstitial-1.ts` followed by `interstitial-2.ts`
+- `X-ASSET-LIST` pointing to `/interstitial-assets.json?interstitialId=...&duration=...`, which resolves the ad group into per-asset `.m3u8` playlists for `interstitial-1.ts` and `interstitial-2.ts`
 - `X-RESUME-OFFSET` equal to the two-segment broadcast ad duration
 - `X-PLAYOUT-LIMIT` equal to the two-segment interstitial duration
 
@@ -47,5 +47,5 @@ http://127.0.0.1:8765/
 - Media generation uses local `say` and `ffmpeg`.
 - All media is audio-only AAC in MPEG-TS containers.
 - The live playlist advances by wall clock time and keeps an eight-segment window, currently about 48.3 seconds.
-- Broadcast ad assets are grouped into one ad break, so supported players should replace `broadcast-ad-1.ts` and `broadcast-ad-2.ts` with one interstitial playlist containing `interstitial-1.ts` and `interstitial-2.ts`.
+- Broadcast ad assets are grouped into one ad break, so supported players should replace `broadcast-ad-1.ts` and `broadcast-ad-2.ts` with the `.m3u8` playlists returned by the asset-list endpoint.
 - Generated segments speak their chunk name first, then use a unique sine tone for the rest of the chunk.
