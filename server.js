@@ -7,15 +7,17 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
+const hlsJsPath = path.join(__dirname, "node_modules", "hls.js", "dist", "hls.min.js");
 
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 8765);
 const segmentDuration = 6.037333;
 const adBreakSegments = 2;
 const adBreakDuration = segmentDuration * adBreakSegments;
-const playlistWindow = 8;
+const playlistWindow = 16;
+const interstitialLeadSegments = Math.ceil((3 * Math.ceil(segmentDuration)) / segmentDuration);
 const mediaVersion = process.env.MEDIA_VERSION || Date.now().toString(36);
-const startedAtMs = Date.now() - segmentDuration * 1000 * 3;
+const startedAtMs = Date.now() - segmentDuration * 1000 * (playlistWindow + interstitialLeadSegments);
 const interstitialAssets = ["interstitial-1.ts", "interstitial-2.ts"];
 const allowedInterstitialAssets = new Set(interstitialAssets);
 
@@ -53,13 +55,36 @@ function formatDuration(seconds) {
   return seconds.toFixed(6);
 }
 
-function shouldEmitInterstitial(item, sequence, firstSeq) {
-  return item.type === "broadcast-ad" && (item.adBreakPosition === 0 || sequence === firstSeq);
-}
-
 function parseDuration(value, fallback) {
   const duration = Number(value);
   return Number.isFinite(duration) && duration > 0 ? duration : fallback;
+}
+
+function adBreakStartForSequence(sequence) {
+  const item = loop[sequence % loop.length];
+  if (item.type !== "broadcast-ad") {
+    return null;
+  }
+  return sequence - item.adBreakPosition;
+}
+
+function interstitialDateRange(baseUrl, adBreakStartSequence) {
+  const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
+  const id = `ad-break-${adBreakStartSequence}`;
+  const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(adBreakDuration)}`;
+  return `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",DURATION=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-RESUME-OFFSET=${formatDuration(adBreakDuration)},X-PLAYOUT-LIMIT=${formatDuration(adBreakDuration)}`;
+}
+
+function interstitialStartSequences(firstSeq, elapsedSegments) {
+  const startSequences = new Set();
+  const lastSeqToAdvertise = elapsedSegments + interstitialLeadSegments;
+  for (let sequence = firstSeq; sequence <= lastSeqToAdvertise; sequence += 1) {
+    const adBreakStartSequence = adBreakStartForSequence(sequence);
+    if (adBreakStartSequence !== null && adBreakStartSequence >= firstSeq - adBreakSegments + 1) {
+      startSequences.add(adBreakStartSequence);
+    }
+  }
+  return Array.from(startSequences).sort((a, b) => a - b);
 }
 
 function livePlaylist(baseUrl) {
@@ -74,19 +99,13 @@ function livePlaylist(baseUrl) {
     "#EXT-X-INDEPENDENT-SEGMENTS"
   ];
 
+  for (const adBreakStartSequence of interstitialStartSequences(firstSeq, elapsedSegments)) {
+    lines.push(interstitialDateRange(baseUrl, adBreakStartSequence));
+  }
+
   for (let sequence = firstSeq; sequence <= elapsedSegments; sequence += 1) {
     const item = loop[sequence % loop.length];
     const startMs = startedAtMs + sequence * segmentDuration * 1000;
-
-    if (shouldEmitInterstitial(item, sequence, firstSeq)) {
-      const adBreakStartSequence = sequence - item.adBreakPosition;
-      const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
-      const id = `ad-break-${adBreakStartSequence}`;
-      const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(adBreakDuration)}`;
-      lines.push(
-        `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",DURATION=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-RESUME-OFFSET=${formatDuration(adBreakDuration)},X-PLAYOUT-LIMIT=${formatDuration(adBreakDuration)}`
-      );
-    }
 
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${isoAt(startMs)}`);
     if (sequence > firstSeq) {
@@ -171,12 +190,27 @@ async function serveStatic(res, urlPath) {
   res.end(body);
 }
 
+async function serveHlsJs(res) {
+  const body = await readFile(hlsJsPath);
+  res.writeHead(200, {
+    "Content-Type": mimeTypes[".js"],
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "Access-Control-Allow-Origin": "*"
+  });
+  res.end(body);
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || `${host}:${port}`}`);
 
     if (url.pathname === "/" || url.pathname === "/index.html") {
       await serveStatic(res, "/index.html");
+      return;
+    }
+
+    if (url.pathname === "/vendor/hls.min.js") {
+      await serveHlsJs(res);
       return;
     }
 

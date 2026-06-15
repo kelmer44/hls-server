@@ -13,14 +13,16 @@
       body {
         margin: 0;
         min-height: 100vh;
-        display: grid;
-        place-items: center;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         background: #f5f5f2;
         color: #202124;
       }
 
       main {
         width: min(720px, calc(100vw - 32px));
+        padding: 32px 0;
       }
 
       h1 {
@@ -32,10 +34,87 @@
 
       audio {
         width: 100%;
-        margin: 12px 0 20px;
+        margin: 12px 0 12px;
       }
 
-      code {
+      .dvr {
+        margin: 0 0 20px;
+      }
+
+      .dvr-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 0 0 8px;
+        font-size: 13px;
+        color: #4d5650;
+      }
+
+      .dvr-live {
+        appearance: none;
+        border: 1px solid #c5cbc2;
+        border-radius: 6px;
+        padding: 5px 9px;
+        background: #ffffff;
+        color: #202124;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .dvr-live:hover,
+      .dvr-live:focus-visible {
+        border-color: #7b857d;
+      }
+
+      .dvr-track {
+        position: relative;
+        height: 28px;
+        border: 1px solid #c5cbc2;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #dce2d8;
+        cursor: pointer;
+        touch-action: none;
+      }
+
+      .dvr-track:focus-visible {
+        outline: 2px solid #1f6feb;
+        outline-offset: 2px;
+      }
+
+      .dvr-segment {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        background: #dce2d8;
+        border-right: 1px solid rgba(32, 33, 36, 0.12);
+      }
+
+      .dvr-segment-ad {
+        background: #e17a42;
+      }
+
+      .dvr-playhead {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        transform: translateX(-50%);
+        background: #1f6feb;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
+        pointer-events: none;
+      }
+
+      .dvr-window {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 6px;
+        font-size: 12px;
+        color: #5f6862;
+      }
+
+      .stream-url {
         display: block;
         padding: 12px;
         overflow-wrap: anywhere;
@@ -44,15 +123,78 @@
         border-radius: 8px;
       }
 
+      .status {
+        margin: 20px 0 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+      }
+
+      .status-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #8f9690;
+      }
+
+      .status[data-state="ready"] .status-indicator {
+        background: #1f8f4a;
+      }
+
+      .status[data-state="error"] .status-indicator {
+        background: #c33d2e;
+      }
+
+      .log {
+        min-height: 128px;
+        max-height: 260px;
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        background: #202124;
+        border: 1px solid #3a3d40;
+        border-radius: 8px;
+        color: #f3f4f1;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      }
+
       @media (prefers-color-scheme: dark) {
         body {
           background: #171a1c;
           color: #f3f4f1;
         }
 
-        code {
+        .stream-url {
           background: #24282b;
           border-color: #3a4044;
+        }
+
+        .dvr-header,
+        .dvr-window {
+          color: #b9c0bb;
+        }
+
+        .dvr-live {
+          background: #24282b;
+          border-color: #3a4044;
+          color: #f3f4f1;
+        }
+
+        .dvr-track,
+        .dvr-segment {
+          background: #30363b;
+          border-color: #4b5359;
+        }
+
+        .dvr-segment {
+          border-right-color: rgba(243, 244, 241, 0.12);
+        }
+
+        .dvr-segment-ad {
+          background: #d36b34;
         }
       }
     </style>
@@ -60,8 +202,299 @@
   <body>
     <main>
       <h1>Audio HLS Interstitial Test Stream</h1>
-      <audio controls src="/live.m3u8"></audio>
-      <code>http://127.0.0.1:8765/live.m3u8</code>
+      <audio id="player" controls></audio>
+      <div class="dvr">
+        <div class="dvr-header">
+          <span id="dvr-position">Live window loading</span>
+          <button class="dvr-live" id="dvr-live" type="button">Live</button>
+        </div>
+        <div class="dvr-track" id="dvr-track" role="slider" tabindex="0" aria-label="Live window position" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+          <div id="dvr-segments"></div>
+          <div class="dvr-playhead" id="dvr-playhead"></div>
+        </div>
+        <div class="dvr-window">
+          <span id="dvr-start">-</span>
+          <span id="dvr-end">Live</span>
+        </div>
+      </div>
+      <code class="stream-url" id="stream-url"></code>
+      <div class="status" id="status" data-state="loading">
+        <span class="status-indicator" aria-hidden="true"></span>
+        <span id="status-text">Loading hls.js</span>
+      </div>
+      <pre class="log" id="log" aria-live="polite"></pre>
     </main>
+    <script src="/vendor/hls.min.js"></script>
+    <script>
+      const streamUrl = "/live.m3u8";
+      const player = document.getElementById("player");
+      const streamUrlOutput = document.getElementById("stream-url");
+      const status = document.getElementById("status");
+      const statusText = document.getElementById("status-text");
+      const logOutput = document.getElementById("log");
+      const dvrTrack = document.getElementById("dvr-track");
+      const dvrSegments = document.getElementById("dvr-segments");
+      const dvrPlayhead = document.getElementById("dvr-playhead");
+      const dvrPosition = document.getElementById("dvr-position");
+      const dvrStart = document.getElementById("dvr-start");
+      const dvrEnd = document.getElementById("dvr-end");
+      const dvrLive = document.getElementById("dvr-live");
+      const maxLogEntries = 80;
+      const seekSafety = 0.25;
+      const logEntries = [];
+      let liveWindow = null;
+
+      streamUrlOutput.textContent = new URL(streamUrl, window.location.href).href;
+
+      function timestamp() {
+        return new Date().toLocaleTimeString();
+      }
+
+      function setStatus(state, text) {
+        status.dataset.state = state;
+        statusText.textContent = text;
+      }
+
+      function log(message, details) {
+        const suffix = details ? ` ${JSON.stringify(details)}` : "";
+        logEntries.push(`[${timestamp()}] ${message}${suffix}`);
+        if (logEntries.length > maxLogEntries) {
+          logEntries.shift();
+        }
+        logOutput.textContent = logEntries.join("\n");
+        logOutput.scrollTop = logOutput.scrollHeight;
+      }
+
+      function formatWindowOffset(seconds) {
+        if (!Number.isFinite(seconds)) {
+          return "-";
+        }
+        return `${Math.max(0, Math.round(seconds))}s`;
+      }
+
+      function fragmentUrl(fragment) {
+        return fragment.url || fragment.relurl || "";
+      }
+
+      function isAdFragment(fragment) {
+        return fragmentUrl(fragment).includes("broadcast-ad-");
+      }
+
+      function updateDvrWindow(fragments) {
+        if (!fragments.length) {
+          return;
+        }
+
+        const first = fragments[0];
+        const last = fragments[fragments.length - 1];
+        const start = first.start;
+        const end = last.start + last.duration;
+        const duration = end - start;
+
+        if (!Number.isFinite(start) || !Number.isFinite(end) || duration <= 0) {
+          return;
+        }
+
+        liveWindow = { start, end, duration };
+        dvrSegments.textContent = "";
+        for (const fragment of fragments) {
+          const segment = document.createElement("div");
+          const left = ((fragment.start - start) / duration) * 100;
+          const width = (fragment.duration / duration) * 100;
+          segment.className = `dvr-segment${isAdFragment(fragment) ? " dvr-segment-ad" : ""}`;
+          segment.style.left = `${left}%`;
+          segment.style.width = `${width}%`;
+          dvrSegments.append(segment);
+        }
+
+        dvrStart.textContent = `-${formatWindowOffset(duration)}`;
+        dvrEnd.textContent = "Live";
+        dvrTrack.setAttribute("aria-valuemin", String(Math.round(start)));
+        dvrTrack.setAttribute("aria-valuemax", String(Math.round(end)));
+        updateDvrPlayhead();
+      }
+
+      function updateDvrPlayhead() {
+        if (!liveWindow) {
+          return;
+        }
+
+        const clampedTime = Math.min(Math.max(player.currentTime, liveWindow.start), liveWindow.end);
+        const percent = ((clampedTime - liveWindow.start) / liveWindow.duration) * 100;
+        const behindLive = liveWindow.end - clampedTime;
+
+        dvrPlayhead.style.left = `${Math.min(Math.max(percent, 0), 100)}%`;
+        dvrPosition.textContent = behindLive < 1 ? "Live" : `-${formatWindowOffset(behindLive)}`;
+        dvrTrack.setAttribute("aria-valuenow", String(Math.round(clampedTime)));
+        dvrTrack.setAttribute("aria-valuetext", dvrPosition.textContent);
+      }
+
+      function seekToWindowTime(time) {
+        if (!liveWindow) {
+          return;
+        }
+
+        const target = Math.min(Math.max(time, liveWindow.start + seekSafety), liveWindow.end - seekSafety);
+        player.currentTime = target;
+        if (window.hls) {
+          window.hls.startLoad(target);
+        }
+        updateDvrPlayhead();
+        log("DVR seek", {
+          position: Number(target.toFixed(3)),
+          behindLive: Number((liveWindow.end - target).toFixed(3))
+        });
+      }
+
+      function seekFromPointer(event) {
+        if (!liveWindow) {
+          return;
+        }
+
+        const rect = dvrTrack.getBoundingClientRect();
+        const ratio = (event.clientX - rect.left) / rect.width;
+        seekToWindowTime(liveWindow.start + Math.min(Math.max(ratio, 0), 1) * liveWindow.duration);
+      }
+
+      function start() {
+        if (!window.Hls) {
+          setStatus("error", "hls.js bundle failed to load");
+          log("hls.js was not available on window.Hls");
+          return;
+        }
+
+        if (!Hls.isSupported()) {
+          setStatus("error", "hls.js is not supported in this browser");
+          log("MediaSource Extensions are required for this hls.js test");
+          return;
+        }
+
+        const hls = new Hls({
+          debug: false,
+          enableWorker: true,
+          lowLatencyMode: false,
+          maxBufferLength: 120
+        });
+
+        window.hls = hls;
+        log(`hls.js ${Hls.version} created`);
+
+        hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+          log("Media attached");
+          hls.loadSource(streamUrl);
+        });
+
+        hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+          setStatus("ready", `hls.js parsed manifest with ${data.levels.length} level(s)`);
+          log("Manifest parsed", {
+            levels: data.levels.length,
+            audioTracks: data.audioTracks.length
+          });
+        });
+
+        hls.on(Hls.Events.LEVEL_LOADED, (event, data) => {
+          updateDvrWindow(data.details.fragments);
+          log("Level loaded", {
+            live: data.details.live,
+            sequence: data.details.startSN,
+            fragments: data.details.fragments.length,
+            targetDuration: data.details.targetduration
+          });
+        });
+
+        hls.on(Hls.Events.FRAG_LOADED, (event, data) => {
+          log("Fragment loaded", {
+            sequence: data.frag.sn,
+            duration: Number(data.frag.duration.toFixed(3)),
+            url: data.frag.url
+          });
+        });
+
+        if (Hls.Events.INTERSTITIALS_UPDATED) {
+          hls.on(Hls.Events.INTERSTITIALS_UPDATED, (event, data) => {
+            log("Interstitials updated", {
+              count: data.events ? data.events.length : undefined
+            });
+          });
+        }
+
+        if (Hls.Events.ASSET_LIST_LOADED) {
+          hls.on(Hls.Events.ASSET_LIST_LOADED, (event, data) => {
+            log("Interstitial asset list loaded", {
+              id: data.event && data.event.identifier,
+              assets: data.assetList && data.assetList.ASSETS ? data.assetList.ASSETS.length : undefined
+            });
+          });
+        }
+
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          const details = {
+            type: data.type,
+            details: data.details,
+            fatal: data.fatal
+          };
+          log("hls.js error", details);
+
+          if (!data.fatal) {
+            return;
+          }
+
+          setStatus("error", `Fatal hls.js error: ${data.details}`);
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            log("Attempting network recovery");
+            hls.startLoad();
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            log("Attempting media recovery");
+            hls.recoverMediaError();
+          } else {
+            hls.destroy();
+          }
+        });
+
+        hls.attachMedia(player);
+      }
+
+      dvrTrack.addEventListener("pointerdown", (event) => {
+        dvrTrack.setPointerCapture(event.pointerId);
+        seekFromPointer(event);
+      });
+
+      dvrTrack.addEventListener("pointermove", (event) => {
+        if (event.buttons === 1) {
+          seekFromPointer(event);
+        }
+      });
+
+      dvrTrack.addEventListener("keydown", (event) => {
+        if (!liveWindow) {
+          return;
+        }
+
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          seekToWindowTime(player.currentTime - 6);
+        } else if (event.key === "ArrowRight") {
+          event.preventDefault();
+          seekToWindowTime(player.currentTime + 6);
+        } else if (event.key === "Home") {
+          event.preventDefault();
+          seekToWindowTime(liveWindow.start);
+        } else if (event.key === "End") {
+          event.preventDefault();
+          seekToWindowTime(liveWindow.end);
+        }
+      });
+
+      dvrLive.addEventListener("click", () => {
+        if (liveWindow) {
+          seekToWindowTime(liveWindow.end);
+        }
+      });
+
+      player.addEventListener("timeupdate", updateDvrPlayhead);
+      player.addEventListener("seeking", updateDvrPlayhead);
+
+      start();
+    </script>
   </body>
 </html>
