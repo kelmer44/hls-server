@@ -7,26 +7,33 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
-const hlsDistDir = path.join(__dirname, "node_modules", "hls.js", "dist");
+const hlsJsPath = path.join(__dirname, "node_modules", "hls.js", "dist", "hls.min.js");
 
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 8765);
+const logRequests = process.env.REQUEST_LOG === "1";
 const segmentDuration = 6.037333;
-const defaultPlaylistWindow = 8;
+const adBreakSegments = 2;
+const adBreakDuration = segmentDuration * adBreakSegments;
+const playlistWindow = 16;
+const interstitialLeadSegments = Math.ceil((3 * Math.ceil(segmentDuration)) / segmentDuration);
 const mediaVersion = process.env.MEDIA_VERSION || Date.now().toString(36);
-let startedAtMs = Date.now() - segmentDuration * 1000 * 3;
-const contentAssets = [
-  "content-1.ts",
-  "content-2.ts",
-  "content-3.ts",
-  "content-4.ts",
-  "content-5.ts",
-  "content-6.ts"
-];
-const broadcastAdAssets = ["broadcast-ad-1.ts", "broadcast-ad-2.ts"];
+const startedAtMs = Date.now() - segmentDuration * 1000 * (playlistWindow + interstitialLeadSegments);
 const interstitialAssets = ["interstitial-1.ts", "interstitial-2.ts"];
 const allowedInterstitialAssets = new Set(interstitialAssets);
-let adSettings = normalizeAdSettings();
+
+const loop = [
+  { type: "content", file: "content-1.ts" },
+  { type: "content", file: "content-2.ts" },
+  { type: "content", file: "content-3.ts" },
+  { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
+  { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 },
+  { type: "content", file: "content-4.ts" },
+  { type: "content", file: "content-5.ts" },
+  { type: "content", file: "content-6.ts" },
+  { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
+  { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 }
+];
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -49,111 +56,49 @@ function formatDuration(seconds) {
   return seconds.toFixed(6);
 }
 
-function shouldEmitInterstitial(item, sequence, firstSeq) {
-  return adSettings.adsEnabled && item.type === "broadcast-ad" && (item.adBreakPosition === 0 || sequence === firstSeq);
-}
-
-function clampInteger(value, fallback, min, max) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, Math.round(number)));
-}
-
-function normalizeAdSettings(input = {}) {
-  return {
-    adsEnabled: input.adsEnabled !== false,
-    contentSegmentsBeforeAd: clampInteger(input.contentSegmentsBeforeAd, 3, 1, 24),
-    adSegmentsPerBreak: clampInteger(input.adSegmentsPerBreak, 2, 1, broadcastAdAssets.length),
-    playlistWindow: clampInteger(input.playlistWindow, defaultPlaylistWindow, 3, 30)
-  };
-}
-
-function resetSchedule() {
-  startedAtMs = Date.now() - segmentDuration * 1000 * Math.min(3, adSettings.playlistWindow - 1);
-}
-
-function adBreakDuration() {
-  return segmentDuration * adSettings.adSegmentsPerBreak;
-}
-
-function cycleLength() {
-  return adSettings.contentSegmentsBeforeAd + adSettings.adSegmentsPerBreak;
-}
-
-function itemAtSequence(sequence) {
-  const position = sequence % cycleLength();
-  if (position < adSettings.contentSegmentsBeforeAd) {
-    const cycleIndex = Math.floor(sequence / cycleLength());
-    const contentIndex = cycleIndex * adSettings.contentSegmentsBeforeAd + position;
-    return {
-      type: "content",
-      file: contentAssets[contentIndex % contentAssets.length]
-    };
-  }
-
-  const adBreakPosition = position - adSettings.contentSegmentsBeforeAd;
-  return {
-    type: "broadcast-ad",
-    file: broadcastAdAssets[adBreakPosition % broadcastAdAssets.length],
-    adBreakPosition
-  };
-}
-
-function nextAdBreakInfo(nowMs = Date.now()) {
-  if (!adSettings.adsEnabled) {
-    return null;
-  }
-
-  const elapsedSegments = Math.max(0, Math.floor((nowMs - startedAtMs) / (segmentDuration * 1000)));
-  const position = elapsedSegments % cycleLength();
-  const segmentsUntilBreak = position < adSettings.contentSegmentsBeforeAd
-    ? adSettings.contentSegmentsBeforeAd - position
-    : 0;
-  const sequence = elapsedSegments + segmentsUntilBreak;
-  const startsAtMs = startedAtMs + sequence * segmentDuration * 1000;
-
-  return {
-    sequence,
-    startsAt: isoAt(startsAtMs),
-    secondsUntil: Math.max(0, Number(((startsAtMs - nowMs) / 1000).toFixed(3)))
-  };
-}
-
-function settingsResponse(req) {
-  const baseUrl = requestBaseUrl(req);
-  return {
-    ...adSettings,
-    segmentDuration: Number(formatDuration(segmentDuration)),
-    adBreakDuration: Number(formatDuration(adBreakDuration())),
-    cycleDuration: Number(formatDuration(segmentDuration * cycleLength())),
-    liveUrl: `${baseUrl}/live.m3u8`,
-    nextAdBreak: nextAdBreakInfo()
-  };
-}
-
-async function readJsonBody(req) {
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(chunk);
-  }
-
-  if (chunks.length === 0) {
-    return {};
-  }
-
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
 function parseDuration(value, fallback) {
   const duration = Number(value);
   return Number.isFinite(duration) && duration > 0 ? duration : fallback;
 }
 
+function adBreakStartForSequence(sequence) {
+  const item = loop[sequence % loop.length];
+  if (item.type !== "broadcast-ad") {
+    return null;
+  }
+  return sequence - item.adBreakPosition;
+}
+
+function prefetchDateRange(adBreakStartSequence) {
+  const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
+  const prefetchStartMs = adBreakStartMs - segmentDuration * 1000;
+  const id = `ad-break-${adBreakStartSequence}`;
+  const prefetchId = `prefetch_${id}`;
+  return `#EXT-X-DATERANGE:ID="${quote(prefetchId)}",START-DATE="${isoAt(prefetchStartMs)}",END-DATE="${isoAt(adBreakStartMs)}",X-PREFETCH-DURATION="${formatDuration(adBreakDuration)}",X-PREFETCH-ID="${quote(id)}"`;
+}
+
+function interstitialDateRange(baseUrl, adBreakStartSequence) {
+  const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
+  const id = `ad-break-${adBreakStartSequence}`;
+  const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(adBreakDuration)}`;
+  return `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",PLANNED-DURATION=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-SNAP="OUT,IN",X-TIMELINE-OCCUPIES="RANGE",X-TIMELINE-STYLE="HIGHLIGHT",X-CONTENT-MAY-VARY="YES"`;
+}
+
+function interstitialStartSequences(firstSeq, elapsedSegments) {
+  const startSequences = new Set();
+  const lastSeqToAdvertise = elapsedSegments + interstitialLeadSegments;
+  for (let sequence = firstSeq; sequence <= lastSeqToAdvertise; sequence += 1) {
+    const adBreakStartSequence = adBreakStartForSequence(sequence);
+    if (adBreakStartSequence !== null && adBreakStartSequence >= firstSeq - adBreakSegments + 1) {
+      startSequences.add(adBreakStartSequence);
+    }
+  }
+  return Array.from(startSequences).sort((a, b) => a - b);
+}
+
 function livePlaylist(baseUrl) {
   const elapsedSegments = Math.max(0, Math.floor((Date.now() - startedAtMs) / (segmentDuration * 1000)));
-  const firstSeq = Math.max(0, elapsedSegments - adSettings.playlistWindow + 1);
+  const firstSeq = Math.max(0, elapsedSegments - playlistWindow + 1);
   const lines = [
     "#EXTM3U",
     "#EXT-X-VERSION:7",
@@ -163,27 +108,30 @@ function livePlaylist(baseUrl) {
     "#EXT-X-INDEPENDENT-SEGMENTS"
   ];
 
-  for (let sequence = firstSeq; sequence <= elapsedSegments; sequence += 1) {
-    const item = itemAtSequence(sequence);
-    const startMs = startedAtMs + sequence * segmentDuration * 1000;
+  const advertisedInterstitials = new Set(interstitialStartSequences(firstSeq, elapsedSegments));
 
-    if (shouldEmitInterstitial(item, sequence, firstSeq)) {
-      const adBreakStartSequence = sequence - item.adBreakPosition;
-      const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
-      const id = `ad-break-${adBreakStartSequence}`;
-      const duration = adBreakDuration();
-      const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(duration)}`;
-      lines.push(
-        `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",DURATION=${formatDuration(duration)},X-ASSET-LIST="${quote(assetListUri)}",X-RESUME-OFFSET=${formatDuration(duration)},X-PLAYOUT-LIMIT=${formatDuration(duration)}`
-      );
+  for (let sequence = firstSeq; sequence <= elapsedSegments; sequence += 1) {
+    const item = loop[sequence % loop.length];
+    const startMs = startedAtMs + sequence * segmentDuration * 1000;
+    const nextSequence = sequence + 1;
+    const nextInterstitialStartSequence = advertisedInterstitials.has(nextSequence) ? nextSequence : null;
+
+    if (sequence === firstSeq && advertisedInterstitials.has(sequence) && item.type === "broadcast-ad" && item.adBreakPosition === 0) {
+      lines.push(interstitialDateRange(baseUrl, sequence));
     }
 
+    if (nextInterstitialStartSequence !== null) {
+      lines.push(prefetchDateRange(nextInterstitialStartSequence));
+    }
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${isoAt(startMs)}`);
     if (sequence > firstSeq) {
       lines.push("#EXT-X-DISCONTINUITY");
     }
     lines.push(`#EXTINF:${formatDuration(segmentDuration)},`);
     lines.push(`/media/${item.file}?v=${mediaVersion}&seq=${sequence}`);
+    if (nextInterstitialStartSequence !== null) {
+      lines.push(interstitialDateRange(baseUrl, nextInterstitialStartSequence));
+    }
   }
 
   return `${lines.join("\n")}\n`;
@@ -261,12 +209,30 @@ async function serveStatic(res, urlPath) {
   res.end(body);
 }
 
+async function serveHlsJs(res) {
+  const body = await readFile(hlsJsPath);
+  res.writeHead(200, {
+    "Content-Type": mimeTypes[".js"],
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "Access-Control-Allow-Origin": "*"
+  });
+  res.end(body);
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || `${host}:${port}`}`);
+    if (logRequests) {
+      console.log(`[${new Date().toISOString()}] ${req.method} ${url.pathname}${url.search}`);
+    }
 
     if (url.pathname === "/" || url.pathname === "/index.html") {
       await serveStatic(res, "/index.html");
+      return;
+    }
+
+    if (url.pathname === "/vendor/hls.min.js") {
+      await serveHlsJs(res);
       return;
     }
 
@@ -277,41 +243,6 @@ const server = createServer(async (req, res) => {
         "Access-Control-Allow-Origin": "*"
       });
       res.end(livePlaylist(requestBaseUrl(req)));
-      return;
-    }
-
-    if (url.pathname === "/settings") {
-      if (req.method === "GET") {
-        res.writeHead(200, {
-          "Content-Type": mimeTypes[".json"],
-          "Cache-Control": "no-store",
-          "Access-Control-Allow-Origin": "*"
-        });
-        res.end(`${JSON.stringify(settingsResponse(req), null, 2)}\n`);
-        return;
-      }
-
-      if (req.method === "POST") {
-        const body = await readJsonBody(req);
-        adSettings = normalizeAdSettings(body);
-        resetSchedule();
-        res.writeHead(200, {
-          "Content-Type": mimeTypes[".json"],
-          "Cache-Control": "no-store",
-          "Access-Control-Allow-Origin": "*"
-        });
-        res.end(`${JSON.stringify(settingsResponse(req), null, 2)}\n`);
-        return;
-      }
-    }
-
-    if (url.pathname === "/vendor/hls.min.js") {
-      await serveVendorHls(res, "hls.min.js");
-      return;
-    }
-
-    if (url.pathname === "/vendor/hls.min.js.map") {
-      await serveVendorHls(res, "hls.min.js.map");
       return;
     }
 
@@ -329,7 +260,7 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/interstitial-assets.json") {
       const interstitialId = url.searchParams.get("interstitialId") || "ad-break";
-      const duration = parseDuration(url.searchParams.get("duration"), adBreakDuration());
+      const duration = parseDuration(url.searchParams.get("duration"), adBreakDuration);
       res.writeHead(200, {
         "Content-Type": mimeTypes[".json"],
         "Cache-Control": "no-store",
@@ -356,23 +287,8 @@ const server = createServer(async (req, res) => {
   }
 });
 
-async function serveVendorHls(res, fileName) {
-  const body = await readFile(path.join(hlsDistDir, fileName));
-  res.writeHead(200, {
-    "Content-Type": fileName.endsWith(".map") ? "application/json; charset=utf-8" : mimeTypes[".js"],
-    "Cache-Control": "public, max-age=31536000, immutable",
-    "Access-Control-Allow-Origin": "*"
-  });
-  res.end(body);
-}
-
 if (!existsSync(path.join(publicDir, "media", "content-1.ts"))) {
   console.error("Missing generated media. Run: npm run generate");
-  process.exit(1);
-}
-
-if (!existsSync(path.join(hlsDistDir, "hls.min.js"))) {
-  console.error("Missing hls.js dependency. Run: npm install");
   process.exit(1);
 }
 

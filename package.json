@@ -9,5 +9,8 @@
   "scripts": {
     "generate": "node scripts/generate-media.js",
     "start": "node server.js"
+  },
+  "dependencies": {
+    "hls.js": "^1.6.16"
   }
 }
