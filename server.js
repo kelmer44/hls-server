@@ -11,6 +11,7 @@ const hlsJsPath = path.join(__dirname, "node_modules", "hls.js", "dist", "hls.mi
 
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 8765);
+const logRequests = process.env.REQUEST_LOG === "1";
 const segmentDuration = 6.037333;
 const adBreakSegments = 2;
 const adBreakDuration = segmentDuration * adBreakSegments;
@@ -68,11 +69,19 @@ function adBreakStartForSequence(sequence) {
   return sequence - item.adBreakPosition;
 }
 
+function prefetchDateRange(adBreakStartSequence) {
+  const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
+  const prefetchStartMs = adBreakStartMs - segmentDuration * 1000;
+  const id = `ad-break-${adBreakStartSequence}`;
+  const prefetchId = `prefetch_${id}`;
+  return `#EXT-X-DATERANGE:ID="${quote(prefetchId)}",START-DATE="${isoAt(prefetchStartMs)}",END-DATE="${isoAt(adBreakStartMs)}",X-PREFETCH-DURATION="${formatDuration(adBreakDuration)}",X-PREFETCH-ID="${quote(id)}"`;
+}
+
 function interstitialDateRange(baseUrl, adBreakStartSequence) {
   const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
   const id = `ad-break-${adBreakStartSequence}`;
   const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(adBreakDuration)}`;
-  return `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",DURATION=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-RESUME-OFFSET=${formatDuration(adBreakDuration)},X-PLAYOUT-LIMIT=${formatDuration(adBreakDuration)},X-SNAP="OUT,IN"`;
+  return `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",PLANNED-DURATION=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-SNAP="OUT,IN",X-TIMELINE-OCCUPIES="RANGE",X-TIMELINE-STYLE="HIGHLIGHT",X-CONTENT-MAY-VARY="YES"`;
 }
 
 function interstitialStartSequences(firstSeq, elapsedSegments) {
@@ -99,20 +108,30 @@ function livePlaylist(baseUrl) {
     "#EXT-X-INDEPENDENT-SEGMENTS"
   ];
 
-  for (const adBreakStartSequence of interstitialStartSequences(firstSeq, elapsedSegments)) {
-    lines.push(interstitialDateRange(baseUrl, adBreakStartSequence));
-  }
+  const advertisedInterstitials = new Set(interstitialStartSequences(firstSeq, elapsedSegments));
 
   for (let sequence = firstSeq; sequence <= elapsedSegments; sequence += 1) {
     const item = loop[sequence % loop.length];
     const startMs = startedAtMs + sequence * segmentDuration * 1000;
+    const nextSequence = sequence + 1;
+    const nextInterstitialStartSequence = advertisedInterstitials.has(nextSequence) ? nextSequence : null;
 
+    if (sequence === firstSeq && advertisedInterstitials.has(sequence) && item.type === "broadcast-ad" && item.adBreakPosition === 0) {
+      lines.push(interstitialDateRange(baseUrl, sequence));
+    }
+
+    if (nextInterstitialStartSequence !== null) {
+      lines.push(prefetchDateRange(nextInterstitialStartSequence));
+    }
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${isoAt(startMs)}`);
     if (sequence > firstSeq) {
       lines.push("#EXT-X-DISCONTINUITY");
     }
     lines.push(`#EXTINF:${formatDuration(segmentDuration)},`);
     lines.push(`/media/${item.file}?v=${mediaVersion}&seq=${sequence}`);
+    if (nextInterstitialStartSequence !== null) {
+      lines.push(interstitialDateRange(baseUrl, nextInterstitialStartSequence));
+    }
   }
 
   return `${lines.join("\n")}\n`;
@@ -203,6 +222,9 @@ async function serveHlsJs(res) {
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || `${host}:${port}`}`);
+    if (logRequests) {
+      console.log(`[${new Date().toISOString()}] ${req.method} ${url.pathname}${url.search}`);
+    }
 
     if (url.pathname === "/" || url.pathname === "/index.html") {
       await serveStatic(res, "/index.html");
