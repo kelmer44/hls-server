@@ -2,7 +2,7 @@
 
 This is a small local prototype for an audio-only live HLS stream that schedules HLS interstitials over in-band broadcast ad audio.
 
-The main playlist is a sliding live playlist at `/live.m3u8`. It loops content segments and inserts two broadcast ad segments in a row at each ad break: `broadcast-ad-1.ts` followed by `broadcast-ad-2.ts`. The server emits a prefetch `EXT-X-DATERANGE` before the segment immediately preceding each break, then emits the `CLASS="com.apple.hls.interstitial"` daterange before playback reaches the break. The interstitial tag includes:
+The main playlist is a sliding live playlist at `/live.m3u8`. It loops content segments and inserts two broadcast ad segments in a row at each ad break: `broadcast-ad-1.ts` followed by `broadcast-ad-2.ts`. The server emits the `CLASS="com.apple.hls.interstitial"` daterange before playback reaches each break. The interstitial tag includes:
 
 - `CLASS="com.apple.hls.interstitial"`
 - `X-ASSET-LIST` pointing to `/interstitial-assets.json?interstitialId=...&duration=...`, which resolves the ad group into per-asset `.m3u8` playlists for `interstitial-1.ts` and `interstitial-2.ts`
@@ -10,13 +10,19 @@ The main playlist is a sliding live playlist at `/live.m3u8`. It loops content s
 - `X-SNAP="OUT,IN"` so interstitial playback snaps out of and back into the primary stream
 - `X-TIMELINE-OCCUPIES="RANGE"`, `X-TIMELINE-STYLE="HIGHLIGHT"`, and `X-CONTENT-MAY-VARY="YES"`
 
-The prefetch tag uses `X-PREFETCH-DURATION` and `X-PREFETCH-ID` to mirror the marker shape used by production live streams.
+Optional prefetch `EXT-X-DATERANGE` tags can be enabled with `PREFETCH_DATERANGES=1`. These tags are emitted before the segment immediately preceding each break and use `X-PREFETCH-DURATION` and `X-PREFETCH-ID` to mirror the marker shape used by production live streams.
 
 ## Run
 
 ```sh
 npm run generate
 npm start
+```
+
+Custom prefetch dateranges are disabled by default. To enable them:
+
+```sh
+PREFETCH_DATERANGES=1 npm start
 ```
 
 Open:

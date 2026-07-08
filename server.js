@@ -12,6 +12,9 @@ const hlsJsPath = path.join(__dirname, "node_modules", "hls.js", "dist", "hls.mi
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 8765);
 const logRequests = process.env.REQUEST_LOG === "1";
+const prefetchDateRangesEnabled = ["1", "true", "yes", "on"].includes(
+  String(process.env.PREFETCH_DATERANGES || "").toLowerCase()
+);
 const segmentDuration = 6.037333;
 const adBreakSegments = 2;
 const adBreakDuration = segmentDuration * adBreakSegments;
@@ -120,7 +123,7 @@ function livePlaylist(baseUrl) {
       lines.push(interstitialDateRange(baseUrl, sequence));
     }
 
-    if (nextInterstitialStartSequence !== null) {
+    if (prefetchDateRangesEnabled && nextInterstitialStartSequence !== null) {
       lines.push(prefetchDateRange(nextInterstitialStartSequence));
     }
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${isoAt(startMs)}`);
@@ -300,4 +303,5 @@ server.listen(port, host, () => {
     console.log(`Phone/Charles URL:     ${url}`);
   }
   console.log(`Preview page:          http://${displayHost}:${port}/`);
+  console.log(`Prefetch dateranges:   ${prefetchDateRangesEnabled ? "enabled" : "disabled"}`);
 });
