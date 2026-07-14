@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,13 +8,13 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const hlsJsPath = path.join(__dirname, "node_modules", "hls.js", "dist", "hls.min.js");
+const configPath = path.resolve(process.env.CONFIG_PATH || path.join(__dirname, "config.json"));
+const config = loadConfig(configPath);
 
-const host = process.env.HOST || "0.0.0.0";
-const port = Number(process.env.PORT || 8765);
-const logRequests = process.env.REQUEST_LOG === "1";
-const prefetchDateRangesEnabled = ["1", "true", "yes", "on"].includes(
-  String(process.env.PREFETCH_DATERANGES || "").toLowerCase()
-);
+const host = process.env.HOST || config.host || "0.0.0.0";
+const port = Number(process.env.PORT || config.port || 8765);
+const logRequests = parseBooleanConfig(process.env.REQUEST_LOG, config.logRequests === true);
+const prefetchDateRangesEnabled = parseBooleanConfig(process.env.PREFETCH_DATERANGES, config.prefetchDateRanges === true);
 const segmentDuration = 6.037333;
 const adBreakSegments = 2;
 const adBreakDuration = segmentDuration * adBreakSegments;
@@ -24,6 +24,9 @@ const mediaVersion = process.env.MEDIA_VERSION || Date.now().toString(36);
 const startedAtMs = Date.now() - segmentDuration * 1000 * (playlistWindow + interstitialLeadSegments);
 const interstitialAssets = ["interstitial-1.ts", "interstitial-2.ts"];
 const allowedInterstitialAssets = new Set(interstitialAssets);
+const interstitialAdCountPattern = parseInterstitialAdCountPattern(
+  process.env.INTERSTITIAL_AD_COUNT_PATTERN ?? config.interstitialAdCountPattern
+);
 
 const loop = [
   { type: "content", file: "content-1.ts" },
@@ -37,6 +40,13 @@ const loop = [
   { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
   { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 }
 ];
+
+const adBreakStartOffsets = loop.reduce((offsets, item, index) => {
+  if (item.type === "broadcast-ad" && item.adBreakPosition === 0) {
+    offsets.push(index);
+  }
+  return offsets;
+}, []);
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -64,12 +74,88 @@ function parseDuration(value, fallback) {
   return Number.isFinite(duration) && duration > 0 ? duration : fallback;
 }
 
+function loadConfig(filePath) {
+  if (!existsSync(filePath)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(readFileSync(filePath, "utf8"));
+  } catch (error) {
+    console.warn(`Ignoring config file ${filePath}: ${error.message}`);
+    return {};
+  }
+}
+
+function parseBooleanConfig(value, fallback = false) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (["1", "true", "yes", "on"].includes(String(value).toLowerCase())) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(String(value).toLowerCase())) {
+    return false;
+  }
+  return fallback;
+}
+
+function parseInterstitialAdCountPattern(value) {
+  const fallback = [interstitialAssets.length];
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  const counts = Array.isArray(value)
+    ? value.map((part) => Number(part))
+    : String(value)
+        .split(",")
+        .map((part) => Number(part.trim()));
+
+  if (counts.length === 0 || counts.some((count) => !Number.isInteger(count) || count < 1 || count > interstitialAssets.length)) {
+    console.warn(
+      `Ignoring interstitial ad count pattern ${JSON.stringify(value)}. Use counts from 1 to ${interstitialAssets.length}.`
+    );
+    return fallback;
+  }
+
+  return counts;
+}
+
+function parseNonNegativeInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : fallback;
+}
+
+function adBreakStartSequenceFromId(interstitialId) {
+  const match = /^ad-break-(\d+)$/.exec(interstitialId);
+  return match ? Number(match[1]) : 0;
+}
+
 function adBreakStartForSequence(sequence) {
   const item = loop[sequence % loop.length];
   if (item.type !== "broadcast-ad") {
     return null;
   }
   return sequence - item.adBreakPosition;
+}
+
+function adBreakOrdinal(adBreakStartSequence) {
+  const offset = adBreakStartSequence % loop.length;
+  const offsetIndex = adBreakStartOffsets.indexOf(offset);
+  if (offsetIndex === -1) {
+    return 0;
+  }
+  return Math.floor(adBreakStartSequence / loop.length) * adBreakStartOffsets.length + offsetIndex;
+}
+
+function interstitialAssetsForBreak(adBreakStartSequence) {
+  const patternIndex = adBreakOrdinal(adBreakStartSequence) % interstitialAdCountPattern.length;
+  const adCount = interstitialAdCountPattern[patternIndex];
+  return interstitialAssets.slice(0, adCount);
 }
 
 function prefetchDateRange(adBreakStartSequence) {
@@ -83,8 +169,8 @@ function prefetchDateRange(adBreakStartSequence) {
 function interstitialDateRange(baseUrl, adBreakStartSequence) {
   const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
   const id = `ad-break-${adBreakStartSequence}`;
-  const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(adBreakDuration)}`;
-  return `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",PLANNED-DURATION=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-SNAP="OUT,IN",X-TIMELINE-OCCUPIES="RANGE",X-TIMELINE-STYLE="HIGHLIGHT",X-CONTENT-MAY-VARY="YES"`;
+  const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(adBreakDuration)}&adBreakStartSequence=${adBreakStartSequence}`;
+  return `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",PLANNED-DURATION=${formatDuration(adBreakDuration)},X-PLAYOUT-LIMIT=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-SNAP="OUT,IN",X-TIMELINE-OCCUPIES="RANGE",X-TIMELINE-STYLE="HIGHLIGHT",X-CONTENT-MAY-VARY="YES"`;
 }
 
 function interstitialStartSequences(firstSeq, elapsedSegments) {
@@ -161,10 +247,11 @@ function interstitialPlaylist(asset, duration) {
   ].join("\n") + "\n";
 }
 
-function interstitialAssetList(baseUrl, interstitialId, duration) {
-  const assetDuration = duration / interstitialAssets.length;
+function interstitialAssetList(baseUrl, interstitialId, duration, adBreakStartSequence) {
+  const assets = interstitialAssetsForBreak(adBreakStartSequence);
+  const assetDuration = duration / adBreakSegments;
   return {
-    ASSETS: interstitialAssets.map((asset, index) => {
+    ASSETS: assets.map((asset, index) => {
       const uri = new URL("/interstitial.m3u8", baseUrl);
       uri.searchParams.set("interstitialId", interstitialId);
       uri.searchParams.set("asset", asset);
@@ -264,12 +351,16 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/interstitial-assets.json") {
       const interstitialId = url.searchParams.get("interstitialId") || "ad-break";
       const duration = parseDuration(url.searchParams.get("duration"), adBreakDuration);
+      const adBreakStartSequence = parseNonNegativeInteger(
+        url.searchParams.get("adBreakStartSequence"),
+        adBreakStartSequenceFromId(interstitialId)
+      );
       res.writeHead(200, {
         "Content-Type": mimeTypes[".json"],
         "Cache-Control": "no-store",
         "Access-Control-Allow-Origin": "*"
       });
-      res.end(`${JSON.stringify(interstitialAssetList(requestBaseUrl(req), interstitialId, duration), null, 2)}\n`);
+      res.end(`${JSON.stringify(interstitialAssetList(requestBaseUrl(req), interstitialId, duration, adBreakStartSequence), null, 2)}\n`);
       return;
     }
 
@@ -303,5 +394,7 @@ server.listen(port, host, () => {
     console.log(`Phone/Charles URL:     ${url}`);
   }
   console.log(`Preview page:          http://${displayHost}:${port}/`);
+  console.log(`Config file:           ${existsSync(configPath) ? configPath : "not found"}`);
   console.log(`Prefetch dateranges:   ${prefetchDateRangesEnabled ? "enabled" : "disabled"}`);
+  console.log(`Interstitial ad count pattern: ${interstitialAdCountPattern.join(",")}`);
 });

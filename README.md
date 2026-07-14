@@ -7,6 +7,7 @@ The main playlist is a sliding live playlist at `/live.m3u8`. It loops content s
 - `CLASS="com.apple.hls.interstitial"`
 - `X-ASSET-LIST` pointing to `/interstitial-assets.json?interstitialId=...&duration=...`, which resolves the ad group into per-asset `.m3u8` playlists for `interstitial-1.ts` and `interstitial-2.ts`
 - `PLANNED-DURATION` equal to the two-segment interstitial duration
+- `X-PLAYOUT-LIMIT` equal to the two-segment interstitial duration
 - `X-SNAP="OUT,IN"` so interstitial playback snaps out of and back into the primary stream
 - `X-TIMELINE-OCCUPIES="RANGE"`, `X-TIMELINE-STYLE="HIGHLIGHT"`, and `X-CONTENT-MAY-VARY="YES"`
 
@@ -19,10 +20,27 @@ npm run generate
 npm start
 ```
 
-Custom prefetch dateranges are disabled by default. To enable them:
+Runtime config is read from `config.json` by default:
+
+```json
+{
+  "prefetchDateRanges": false,
+  "interstitialAdCountPattern": [1, 2]
+}
+```
+
+`interstitialAdCountPattern` controls how many interstitial ads are returned for each break. `[1, 2]` alternates one-ad and two-ad breaks while keeping each break's `PLANNED-DURATION`, asset-list `duration`, and `X-PLAYOUT-LIMIT` at the full two-ad duration. Use `[2]` for the original two-ad behavior on every break.
+
+To use a different config file:
 
 ```sh
-PREFETCH_DATERANGES=1 npm start
+CONFIG_PATH=/path/to/config.json npm start
+```
+
+Environment variables still override the config file for quick local testing:
+
+```sh
+PREFETCH_DATERANGES=1 INTERSTITIAL_AD_COUNT_PATTERN=1,2 npm start
 ```
 
 Open:
