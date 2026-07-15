@@ -21,7 +21,8 @@ const clips = [
   { name: "broadcast-ad-1", phrase: "Broadcast ad 1.", toneHz: 784 },
   { name: "broadcast-ad-2", phrase: "Broadcast ad 2.", toneHz: 831 },
   { name: "interstitial-1", phrase: "Interstitial ad 1.", toneHz: 880 },
-  { name: "interstitial-2", phrase: "Interstitial ad 2.", toneHz: 932 }
+  { name: "interstitial-2", phrase: "Interstitial ad 2.", toneHz: 932 },
+  { name: "shim", phrase: "Shim.", toneHz: 1047, duration: 12 }
 ];
 
 function run(command, args) {
@@ -63,12 +64,12 @@ function audioDuration(filePath) {
   return duration;
 }
 
-function makeClip({ name, phrase, toneHz }) {
+function makeClip({ name, phrase, toneHz, duration = segmentDuration }) {
   const voicePath = path.join(scratchDir, `${name}.aiff`);
   const outputPath = path.join(mediaDir, `${name}.ts`);
 
   run("say", ["-o", voicePath, phrase]);
-  const voiceDuration = Math.min(audioDuration(voicePath) + toneLeadInSeconds, segmentDuration - 0.25);
+  const voiceDuration = Math.min(audioDuration(voicePath) + toneLeadInSeconds, duration - 0.25);
   const toneDelayMs = Math.round(voiceDuration * 1000);
   run("ffmpeg", [
     "-hide_banner",
@@ -80,11 +81,11 @@ function makeClip({ name, phrase, toneHz }) {
     "-f",
     "lavfi",
     "-i",
-    `sine=frequency=${toneHz}:sample_rate=48000:duration=${segmentDuration}`,
+    `sine=frequency=${toneHz}:sample_rate=48000:duration=${duration}`,
     "-filter_complex",
-    `[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=1.0,atrim=0:${voiceDuration},apad,atrim=0:${segmentDuration},asetpts=N/SR/TB[voice];` +
-      `[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo,volume=0.08,adelay=${toneDelayMs}:all=1,atrim=0:${segmentDuration},asetpts=N/SR/TB[tone];` +
-      `[voice][tone]amix=inputs=2:duration=longest:normalize=0,aresample=48000,apad,atrim=0:${segmentDuration},asetpts=N/SR/TB[out]`,
+    `[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=1.0,atrim=0:${voiceDuration},apad,atrim=0:${duration},asetpts=N/SR/TB[voice];` +
+      `[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo,volume=0.08,adelay=${toneDelayMs}:all=1,atrim=0:${duration},asetpts=N/SR/TB[tone];` +
+      `[voice][tone]amix=inputs=2:duration=longest:normalize=0,aresample=48000,apad,atrim=0:${duration},asetpts=N/SR/TB[out]`,
     "-map",
     "[out]",
     "-ac",

@@ -27,6 +27,7 @@ const allowedInterstitialAssets = new Set(interstitialAssets);
 const interstitialAdCountPattern = parseInterstitialAdCountPattern(
   process.env.INTERSTITIAL_AD_COUNT_PATTERN ?? config.interstitialAdCountPattern
 );
+const shimDuration = 12.010667;
 
 const loop = [
   { type: "content", file: "content-1.ts" },
@@ -247,6 +248,20 @@ function interstitialPlaylist(asset, duration) {
   ].join("\n") + "\n";
 }
 
+function shimPlaylist() {
+  return [
+    "#EXTM3U",
+    "#EXT-X-VERSION:7",
+    `#EXT-X-TARGETDURATION:${Math.ceil(shimDuration)}`,
+    "#EXT-X-PLAYLIST-TYPE:VOD",
+    "#EXT-X-MEDIA-SEQUENCE:0",
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+    `#EXTINF:${formatDuration(shimDuration)},`,
+    `/media/shim.ts?v=${mediaVersion}`,
+    "#EXT-X-ENDLIST"
+  ].join("\n") + "\n";
+}
+
 function interstitialAssetList(baseUrl, interstitialId, duration, adBreakStartSequence) {
   const assets = interstitialAssetsForBreak(adBreakStartSequence);
   const assetDuration = duration / adBreakSegments;
@@ -345,6 +360,16 @@ const server = createServer(async (req, res) => {
         "Access-Control-Allow-Origin": "*"
       });
       res.end(interstitialPlaylist(asset, duration));
+      return;
+    }
+
+    if (url.pathname === "/shim.m3u8") {
+      res.writeHead(200, {
+        "Content-Type": mimeTypes[".m3u8"],
+        "Cache-Control": "no-store",
+        "Access-Control-Allow-Origin": "*"
+      });
+      res.end(shimPlaylist());
       return;
     }
 
