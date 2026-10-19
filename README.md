@@ -27,12 +27,15 @@ Runtime config is read from `config.json` by default. The loader accepts `//` an
 {
   "prefetchDateRanges": true,
   "interstitialAdCountPattern": [2],
+  "interstitialAdOrderPattern": [[1, 2]],
   "interstitialPlayoutLimitPattern": [3, 8, 12.074666],
   "interstitialResumeOffset": 12.074666
 }
 ```
 
 `interstitialAdCountPattern` controls how many interstitial ads are returned for each break. `[1, 2]` alternates one-ad and two-ad breaks. Use `[2]` to keep both assets available when testing playout limits. The asset durations and `PLANNED-DURATION` do not change when the limit changes.
+
+`interstitialAdOrderPattern` controls asset order for successive breaks. The default `[[1, 2]]` always returns ad 1 then ad 2. Use `[[1, 2], [2, 1]]` to alternate orders, or `[[2, 1]]` to always reverse them. Each entry must contain both ad numbers exactly once; the ad-count pattern selects how many to take from that order. The order stays stable across playlist reloads. Environment override: `INTERSTITIAL_AD_ORDER_PATTERN='[[1,2]]'`. The Media3 demo asset-list resolver preserves the server's asset order and durations before appending any shim.
 
 `interstitialPlayoutLimitPattern` selects the limit in seconds by break ordinal, so the same break keeps its value across playlist reloads. If omitted, the limit defaults to the full two-ad duration. `interstitialResumeOffset` emits an explicit `X-RESUME-OFFSET`; omit it to test the player's automatic resume behavior. Restart the server after editing config.
 

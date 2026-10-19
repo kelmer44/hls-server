@@ -27,6 +27,9 @@ const allowedInterstitialAssets = new Set(interstitialAssets);
 const interstitialAdCountPattern = parseInterstitialAdCountPattern(
   process.env.INTERSTITIAL_AD_COUNT_PATTERN ?? config.interstitialAdCountPattern
 );
+const interstitialAdOrderPattern = parseInterstitialAdOrderPattern(
+  process.env.INTERSTITIAL_AD_ORDER_PATTERN ?? config.interstitialAdOrderPattern
+);
 const interstitialPlayoutLimitPattern = parsePlayoutLimitPattern(
   process.env.INTERSTITIAL_PLAYOUT_LIMIT_PATTERN ?? config.interstitialPlayoutLimitPattern
 );
@@ -142,6 +145,21 @@ function parseNonNegativeInteger(value, fallback) {
   return Number.isInteger(number) && number >= 0 ? number : fallback;
 }
 
+function parseInterstitialAdOrderPattern(value) {
+  if (value === undefined || value === null || value === "") {
+    return [[1, 2]];
+  }
+  const pattern = typeof value === "string" ? JSON.parse(value) : value;
+  if (!Array.isArray(pattern) || pattern.length === 0 || pattern.some((order) =>
+    !Array.isArray(order) || order.length !== interstitialAssets.length ||
+    new Set(order).size !== interstitialAssets.length ||
+    order.some((ad) => !Number.isInteger(ad) || ad < 1 || ad > interstitialAssets.length)
+  )) {
+    throw new Error("interstitialAdOrderPattern must contain orders such as [[1, 2]] or [[1, 2], [2, 1]].");
+  }
+  return pattern;
+}
+
 function parsePlayoutLimitPattern(value) {
   if (value === undefined || value === null || value === "") {
     return [adBreakDuration];
@@ -189,9 +207,11 @@ function adBreakOrdinal(adBreakStartSequence) {
 }
 
 function interstitialAssetsForBreak(adBreakStartSequence) {
-  const patternIndex = adBreakOrdinal(adBreakStartSequence) % interstitialAdCountPattern.length;
+  const ordinal = adBreakOrdinal(adBreakStartSequence);
+  const patternIndex = ordinal % interstitialAdCountPattern.length;
   const adCount = interstitialAdCountPattern[patternIndex];
-  return interstitialAssets.slice(0, adCount);
+  const order = interstitialAdOrderPattern[ordinal % interstitialAdOrderPattern.length];
+  return order.slice(0, adCount).map((ad) => interstitialAssets[ad - 1]);
 }
 
 function prefetchDateRange(adBreakStartSequence) {
@@ -461,6 +481,7 @@ server.listen(port, host, () => {
   console.log(`Config file:           ${existsSync(configPath) ? configPath : "not found"}`);
   console.log(`Prefetch dateranges:   ${prefetchDateRangesEnabled ? "enabled" : "disabled"}`);
   console.log(`Interstitial ad count pattern: ${interstitialAdCountPattern.join(",")}`);
+  console.log(`Interstitial ad order pattern: ${JSON.stringify(interstitialAdOrderPattern)}`);
   console.log(`Interstitial playout limits (seconds): ${interstitialPlayoutLimitPattern.join(",")}`);
   console.log(`Interstitial resume offset (seconds): ${interstitialResumeOffset ?? "automatic"}`);
 });

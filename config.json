@@ -11,6 +11,10 @@
   // Keep [2] for playout-limit tests; [2, 1] alternates two-ad and one-ad breaks.
   "interstitialAdCountPattern": [2],
 
+  // Asset order per successive break, applied before the ad count. Default: [[1, 2]].
+  // [[1, 2]] always plays 1 then 2; [[1, 2], [2, 1]] alternates the order.
+  "interstitialAdOrderPattern": [[1, 2]],
+
   // Total interstitial playback budget in seconds, cycling across breaks.
   // Default: [12.074666] (both full ads). Here: cut ad 1, cut ad 2, full control.
   "interstitialPlayoutLimitPattern": [3, 8, 12.074666],
