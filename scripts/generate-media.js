@@ -22,7 +22,7 @@ const clips = [
   { name: "broadcast-ad-2", phrase: "Broadcast ad 2.", toneHz: 831 },
   { name: "interstitial-1", phrase: "Interstitial ad 1.", toneHz: 880 },
   { name: "interstitial-2", phrase: "Interstitial ad 2.", toneHz: 932 },
-  { name: "shim", phrase: "Shim.", toneHz: 1047, duration: 12 }
+  { name: "shim", phrase: "Shim.", toneHz: 1047, duration: 12, phraseOffsetsSeconds: [0, 6] }
 ];
 
 function run(command, args) {
@@ -64,13 +64,19 @@ function audioDuration(filePath) {
   return duration;
 }
 
-function makeClip({ name, phrase, toneHz, duration = segmentDuration }) {
+function makeClip({ name, phrase, toneHz, duration = segmentDuration, phraseOffsetsSeconds = [0] }) {
   const voicePath = path.join(scratchDir, `${name}.aiff`);
   const outputPath = path.join(mediaDir, `${name}.ts`);
 
   run("say", ["-o", voicePath, phrase]);
   const voiceDuration = Math.min(audioDuration(voicePath) + toneLeadInSeconds, duration - 0.25);
   const toneDelayMs = Math.round(voiceDuration * 1000);
+  const voiceFilters = phraseOffsetsSeconds.map((offsetSeconds, index) => {
+    const voiceDelayMs = Math.round(offsetSeconds * 1000);
+    return `[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=1.0,atrim=0:${voiceDuration},adelay=${voiceDelayMs}:all=1,apad,atrim=0:${duration},asetpts=N/SR/TB[voice${index}]`;
+  });
+  const voiceInputs = phraseOffsetsSeconds.map((_, index) => `[voice${index}]`).join("");
+
   run("ffmpeg", [
     "-hide_banner",
     "-loglevel",
@@ -83,9 +89,9 @@ function makeClip({ name, phrase, toneHz, duration = segmentDuration }) {
     "-i",
     `sine=frequency=${toneHz}:sample_rate=48000:duration=${duration}`,
     "-filter_complex",
-    `[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=1.0,atrim=0:${voiceDuration},apad,atrim=0:${duration},asetpts=N/SR/TB[voice];` +
+    `${voiceFilters.join(";")};` +
       `[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo,volume=0.08,adelay=${toneDelayMs}:all=1,atrim=0:${duration},asetpts=N/SR/TB[tone];` +
-      `[voice][tone]amix=inputs=2:duration=longest:normalize=0,aresample=48000,apad,atrim=0:${duration},asetpts=N/SR/TB[out]`,
+      `${voiceInputs}[tone]amix=inputs=${phraseOffsetsSeconds.length + 1}:duration=longest:normalize=0,aresample=48000,apad,atrim=0:${duration},asetpts=N/SR/TB[out]`,
     "-map",
     "[out]",
     "-ac",
