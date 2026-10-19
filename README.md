@@ -7,7 +7,8 @@ The main playlist is a sliding live playlist at `/live.m3u8`. It loops content s
 - `CLASS="com.apple.hls.interstitial"`
 - `X-ASSET-LIST` pointing to `/interstitial-assets.json?interstitialId=...&duration=...`, which resolves the ad group into per-asset `.m3u8` playlists for `interstitial-1.ts` and `interstitial-2.ts`
 - `PLANNED-DURATION` equal to the two-segment interstitial duration
-- `X-PLAYOUT-LIMIT` equal to the two-segment interstitial duration
+- `X-PLAYOUT-LIMIT` selected from a configurable pattern for successive breaks
+- Optional `X-RESUME-OFFSET` to control where primary playback resumes independently of the limit
 - `X-SNAP="OUT,IN"` so interstitial playback snaps out of and back into the primary stream
 - `X-TIMELINE-OCCUPIES="RANGE"`, `X-TIMELINE-STYLE="HIGHLIGHT"`, and `X-CONTENT-MAY-VARY="YES"`
 
@@ -20,16 +21,40 @@ npm run generate
 npm start
 ```
 
-Runtime config is read from `config.json` by default:
+Runtime config is read from `config.json` by default. The loader accepts `//` and `/* ... */` comments (JSONC); trailing commas are not supported:
 
 ```json
 {
-  "prefetchDateRanges": false,
-  "interstitialAdCountPattern": [1, 2]
+  "prefetchDateRanges": true,
+  "interstitialAdCountPattern": [2],
+  "interstitialPlayoutLimitPattern": [3, 8, 12.074666],
+  "interstitialResumeOffset": 12.074666
 }
 ```
 
-`interstitialAdCountPattern` controls how many interstitial ads are returned for each break. `[1, 2]` alternates one-ad and two-ad breaks while keeping each break's `PLANNED-DURATION`, asset-list `duration`, and `X-PLAYOUT-LIMIT` at the full two-ad duration. Use `[2]` for the original two-ad behavior on every break.
+`interstitialAdCountPattern` controls how many interstitial ads are returned for each break. `[1, 2]` alternates one-ad and two-ad breaks. Use `[2]` to keep both assets available when testing playout limits. The asset durations and `PLANNED-DURATION` do not change when the limit changes.
+
+`interstitialPlayoutLimitPattern` selects the limit in seconds by break ordinal, so the same break keeps its value across playlist reloads. If omitted, the limit defaults to the full two-ad duration. `interstitialResumeOffset` emits an explicit `X-RESUME-OFFSET`; omit it to test the player's automatic resume behavior. Restart the server after editing config.
+
+## Testing PlayoutLimit in Media3
+
+The checked-in config cycles through three cases, with two approximately 6.037333-second ads available in every asset list:
+
+| Limit | Expected interstitial audio |
+| --- | --- |
+| 3 seconds | Ad 1 starts, then cuts off; ad 2 is never played. |
+| 8 seconds | Ad 1 plays fully; ad 2 plays for about 1.963 seconds, then cuts off. |
+| 12.074666 seconds | Both ads play fully (control case). |
+
+The limit applies to the entire interstitial, across both assets. Each asset still declares its full duration and serves its full audio: the player must enforce the cutoff. No media regeneration is needed for this test.
+
+The explicit 12.074666-second resume offset skips both primary broadcast ads in all three cases. Playback should return to `Chunk 4` or `Chunk 1`, depending on the break. Shorter interstitials advance playback relative to the live edge; this is expected with a fixed resume offset. Removing the offset tests a different behavior, where the limit and `X-SNAP="OUT,IN"` can affect the primary resume position.
+
+Play `/live.m3u8` in your modified Media3 player, enter a break through normal playback, and observe at least three successive breaks (roughly 90 seconds). The starting case depends on the server's current break ordinal. Inspect the `ad-break-N` dateranges in the manifest or Charles to identify each limit. Time actual ad playback; asset requests can happen ahead of playback and do not prove an asset was played. The browser preview can help inspect the stream, but Media3 is the player under test.
+
+In the inspected custom Media3 source, `HlsInterstitialsAdsLoader.insertOrUpdateInterstitialInAdGroup` initially records `playoutLimitUs`, but `LoaderCallback.onLoadCompleted` replaces it with each asset's full `durationUs` when resolving `X-ASSET-LIST`. This appears to discard the limit. If all cases play both full ads, inspect that path: it needs to distribute the remaining interstitial budget across assets and exclude assets beyond the budget. This server deliberately keeps the full asset durations so that it can expose that behavior.
+
+To restore the previous server configuration, use `interstitialAdCountPattern: [2, 1]` and remove `interstitialPlayoutLimitPattern` and `interstitialResumeOffset`.
 
 To use a different config file:
 
@@ -41,6 +66,12 @@ Environment variables still override the config file for quick local testing:
 
 ```sh
 PREFETCH_DATERANGES=1 INTERSTITIAL_AD_COUNT_PATTERN=1,2 npm start
+```
+
+To repeat just the 3-second cutoff case:
+
+```sh
+INTERSTITIAL_AD_COUNT_PATTERN=2 INTERSTITIAL_PLAYOUT_LIMIT_PATTERN=3 INTERSTITIAL_RESUME_OFFSET=12.074666 npm start
 ```
 
 Open:

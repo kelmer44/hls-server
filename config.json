@@ -1,4 +1,22 @@
 {
+  // Optional server settings, shown with their defaults:
+  // "host": "0.0.0.0",
+  // "port": 8765,
+  // "logRequests": false,
+
+  // Emit prefetch dateranges before each break. Default: false.
   "prefetchDateRanges": true,
-  "interstitialAdCountPattern": [2, 1]
+
+  // Number of ads per successive break (1 or 2). Default: [2].
+  // Keep [2] for playout-limit tests; [2, 1] alternates two-ad and one-ad breaks.
+  "interstitialAdCountPattern": [2],
+
+  // Total interstitial playback budget in seconds, cycling across breaks.
+  // Default: [12.074666] (both full ads). Here: cut ad 1, cut ad 2, full control.
+  "interstitialPlayoutLimitPattern": [3, 8, 12.074666],
+
+  // Seconds of primary audio to skip at the break, independent of ad playback.
+  // Default: omitted or null (player calculates the resume position).
+  // 12.074666 skips both broadcast ads even when the interstitial cuts off early.
+  "interstitialResumeOffset": 12.074666
 }

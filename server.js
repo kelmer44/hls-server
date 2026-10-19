@@ -27,6 +27,12 @@ const allowedInterstitialAssets = new Set(interstitialAssets);
 const interstitialAdCountPattern = parseInterstitialAdCountPattern(
   process.env.INTERSTITIAL_AD_COUNT_PATTERN ?? config.interstitialAdCountPattern
 );
+const interstitialPlayoutLimitPattern = parsePlayoutLimitPattern(
+  process.env.INTERSTITIAL_PLAYOUT_LIMIT_PATTERN ?? config.interstitialPlayoutLimitPattern
+);
+const interstitialResumeOffset = parseOptionalResumeOffset(
+  process.env.INTERSTITIAL_RESUME_OFFSET ?? config.interstitialResumeOffset
+);
 const shimDuration = 12.010667;
 
 const loop = [
@@ -81,7 +87,12 @@ function loadConfig(filePath) {
   }
 
   try {
-    return JSON.parse(readFileSync(filePath, "utf8"));
+    // Keep quoted strings (including URLs) intact while stripping JSONC comments.
+    const json = readFileSync(filePath, "utf8").replace(
+      /"(?:\\.|[^"\\])*"|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
+      (match) => match.startsWith('"') ? match : match.replace(/[^\r\n]/g, " ")
+    );
+    return JSON.parse(json);
   } catch (error) {
     console.warn(`Ignoring config file ${filePath}: ${error.message}`);
     return {};
@@ -131,6 +142,30 @@ function parseNonNegativeInteger(value, fallback) {
   return Number.isInteger(number) && number >= 0 ? number : fallback;
 }
 
+function parsePlayoutLimitPattern(value) {
+  if (value === undefined || value === null || value === "") {
+    return [adBreakDuration];
+  }
+  const parts = Array.isArray(value) ? value : String(value).split(",");
+  const limits = parts.map(Number);
+  if (limits.length === 0 || parts.some((part) => part === null || String(part).trim() === "") ||
+      limits.some((limit) => !Number.isFinite(limit) || limit < 0)) {
+    throw new Error("interstitialPlayoutLimitPattern must contain non-negative durations in seconds.");
+  }
+  return limits;
+}
+
+function parseOptionalResumeOffset(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const offset = Number(value);
+  if (!Number.isFinite(offset) || offset < 0) {
+    throw new Error("interstitialResumeOffset must be a non-negative duration in seconds.");
+  }
+  return offset;
+}
+
 function adBreakStartSequenceFromId(interstitialId) {
   const match = /^ad-break-(\d+)$/.exec(interstitialId);
   return match ? Number(match[1]) : 0;
@@ -171,7 +206,11 @@ function interstitialDateRange(baseUrl, adBreakStartSequence) {
   const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
   const id = `ad-break-${adBreakStartSequence}`;
   const assetListUri = `${baseUrl}/interstitial-assets.json?interstitialId=${encodeURIComponent(id)}&duration=${formatDuration(adBreakDuration)}&adBreakStartSequence=${adBreakStartSequence}`;
-  return `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",PLANNED-DURATION=${formatDuration(adBreakDuration)},X-PLAYOUT-LIMIT=${formatDuration(adBreakDuration)},X-ASSET-LIST="${quote(assetListUri)}",X-SNAP="OUT,IN",X-TIMELINE-OCCUPIES="RANGE",X-TIMELINE-STYLE="HIGHLIGHT",X-CONTENT-MAY-VARY="YES"`;
+  const playoutLimit = interstitialPlayoutLimitPattern[adBreakOrdinal(adBreakStartSequence) % interstitialPlayoutLimitPattern.length];
+  const resumeOffsetAttribute = interstitialResumeOffset === null
+    ? ""
+    : `,X-RESUME-OFFSET=${formatDuration(interstitialResumeOffset)}`;
+  return `#EXT-X-DATERANGE:ID="${quote(id)}",CLASS="com.apple.hls.interstitial",START-DATE="${isoAt(adBreakStartMs)}",PLANNED-DURATION=${formatDuration(adBreakDuration)},X-PLAYOUT-LIMIT=${formatDuration(playoutLimit)}${resumeOffsetAttribute},X-ASSET-LIST="${quote(assetListUri)}",X-SNAP="OUT,IN",X-TIMELINE-OCCUPIES="RANGE",X-TIMELINE-STYLE="HIGHLIGHT",X-CONTENT-MAY-VARY="YES"`;
 }
 
 function interstitialStartSequences(firstSeq, elapsedSegments) {
@@ -422,4 +461,6 @@ server.listen(port, host, () => {
   console.log(`Config file:           ${existsSync(configPath) ? configPath : "not found"}`);
   console.log(`Prefetch dateranges:   ${prefetchDateRangesEnabled ? "enabled" : "disabled"}`);
   console.log(`Interstitial ad count pattern: ${interstitialAdCountPattern.join(",")}`);
+  console.log(`Interstitial playout limits (seconds): ${interstitialPlayoutLimitPattern.join(",")}`);
+  console.log(`Interstitial resume offset (seconds): ${interstitialResumeOffset ?? "automatic"}`);
 });
