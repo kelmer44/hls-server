@@ -16,9 +16,14 @@ const port = Number(process.env.PORT || config.port || 8765);
 const logRequests = parseBooleanConfig(process.env.REQUEST_LOG, config.logRequests === true);
 const prefetchDateRangesEnabled = parseBooleanConfig(process.env.PREFETCH_DATERANGES, config.prefetchDateRanges === true);
 const segmentDuration = 6.037333;
-const adBreakSegments = 2;
+const adSegmentRepeats = parsePositiveInteger(
+  process.env.AD_SEGMENT_REPEATS ?? config.adSegmentRepeats, 1, "adSegmentRepeats"
+);
+const adBreakSegments = 2 * adSegmentRepeats;
 const adBreakDuration = segmentDuration * adBreakSegments;
-const playlistWindow = 16;
+const playlistWindow = parsePositiveInteger(
+  process.env.PLAYLIST_WINDOW_SEGMENTS ?? config.playlistWindowSegments, 16, "playlistWindowSegments"
+);
 const interstitialLeadSegments = Math.ceil((3 * Math.ceil(segmentDuration)) / segmentDuration);
 const mediaVersion = process.env.MEDIA_VERSION || Date.now().toString(36);
 const startedAtMs = Date.now() - segmentDuration * 1000 * (playlistWindow + interstitialLeadSegments);
@@ -42,13 +47,11 @@ const loop = [
   { type: "content", file: "content-1.ts" },
   { type: "content", file: "content-2.ts" },
   { type: "content", file: "content-3.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
-  { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 },
+  ...broadcastAdBreak(),
   { type: "content", file: "content-4.ts" },
   { type: "content", file: "content-5.ts" },
   { type: "content", file: "content-6.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
-  { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 }
+  ...broadcastAdBreak()
 ];
 
 const adBreakStartOffsets = loop.reduce((offsets, item, index) => {
@@ -66,6 +69,23 @@ const mimeTypes = {
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8"
 };
+
+function broadcastAdBreak() {
+  return Array.from({ length: adBreakSegments }, (_, index) => ({
+    type: "broadcast-ad",
+    file: `broadcast-ad-${index % 2 + 1}.ts`,
+    adBreakPosition: index
+  }));
+}
+
+function parsePositiveInteger(value, fallback, name) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 1) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return number;
+}
 
 function quote(value) {
   return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
@@ -265,8 +285,11 @@ function livePlaylist(baseUrl) {
     const nextSequence = sequence + 1;
     const nextInterstitialStartSequence = advertisedInterstitials.has(nextSequence) ? nextSequence : null;
 
-    if (sequence === firstSeq && advertisedInterstitials.has(sequence) && item.type === "broadcast-ad" && item.adBreakPosition === 0) {
-      lines.push(interstitialDateRange(baseUrl, sequence));
+    if (sequence === firstSeq) {
+      // Keep the marker when a long break starts before the sliding window but still overlaps it.
+      for (const startSequence of advertisedInterstitials) {
+        if (startSequence <= firstSeq) lines.push(interstitialDateRange(baseUrl, startSequence));
+      }
     }
 
     if (prefetchDateRangesEnabled && nextInterstitialStartSequence !== null) {
@@ -287,10 +310,14 @@ function livePlaylist(baseUrl) {
 }
 
 function assetPlaylistLines(asset, duration) {
-  return [
-    `#EXTINF:${formatDuration(duration)},`,
-    `/media/${asset}?v=${mediaVersion}`
-  ];
+  // Every repeated file has its own timestamp origin. Discontinuities let a player join
+  // these existing clips without pretending that a six-second file contains minutes of audio.
+  const repeatCount = Math.max(1, Math.round(duration / segmentDuration));
+  return Array.from({ length: repeatCount }, (_, index) => [
+    ...(index > 0 ? ["#EXT-X-DISCONTINUITY"] : []),
+    `#EXTINF:${formatDuration(segmentDuration)},`,
+    `/media/${asset}?v=${mediaVersion}&repeat=${index}`
+  ]).flat();
 }
 
 function interstitialPlaylist(asset, duration) {
@@ -298,11 +325,14 @@ function interstitialPlaylist(asset, duration) {
   return [
     "#EXTM3U",
     "#EXT-X-VERSION:7",
-    `#EXT-X-TARGETDURATION:${Math.ceil(duration)}`,
+    `#EXT-X-TARGETDURATION:${Math.ceil(segmentDuration)}`,
     "#EXT-X-PLAYLIST-TYPE:VOD",
     "#EXT-X-MEDIA-SEQUENCE:0",
     "#EXT-X-INDEPENDENT-SEGMENTS",
-    ...assets.flatMap((asset) => assetPlaylistLines(asset, duration)),
+    ...assets.flatMap((asset, index) => [
+      ...(index > 0 ? ["#EXT-X-DISCONTINUITY"] : []),
+      ...assetPlaylistLines(asset, duration)
+    ]),
     "#EXT-X-ENDLIST"
   ].join("\n") + "\n";
 }
@@ -323,7 +353,7 @@ function shimPlaylist() {
 
 function interstitialAssetList(baseUrl, interstitialId, duration, adBreakStartSequence) {
   const assets = interstitialAssetsForBreak(adBreakStartSequence);
-  const assetDuration = duration / adBreakSegments;
+  const assetDuration = duration / interstitialAssets.length;
   return {
     ASSETS: assets.map((asset, index) => {
       const uri = new URL("/interstitial.m3u8", baseUrl);
@@ -479,6 +509,8 @@ server.listen(port, host, () => {
   }
   console.log(`Preview page:          http://${displayHost}:${port}/`);
   console.log(`Config file:           ${existsSync(configPath) ? configPath : "not found"}`);
+  console.log(`Live window: ${playlistWindow} segments (${formatDuration(playlistWindow * segmentDuration)} seconds)`);
+  console.log(`Ad breaks: ${adBreakSegments} segments (${formatDuration(adBreakDuration)} seconds)`);
   console.log(`Prefetch dateranges:   ${prefetchDateRangesEnabled ? "enabled" : "disabled"}`);
   console.log(`Interstitial ad count pattern: ${interstitialAdCountPattern.join(",")}`);
   console.log(`Interstitial ad order pattern: ${JSON.stringify(interstitialAdOrderPattern)}`);

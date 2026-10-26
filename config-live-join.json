@@ -1,0 +1,12 @@
+{
+  // Repeat each existing ad clip 18 times: 36 * 6.037333 = 217.343988 seconds.
+  // The main stream and replacement asset playlists contain matching real segments.
+  "adSegmentRepeats": 18,
+  "playlistWindowSegments": 96,
+  "prefetchDateRanges": true,
+  "logRequests": true,
+  "interstitialAdCountPattern": [2],
+  "interstitialAdOrderPattern": [[1, 2]],
+  "interstitialPlayoutLimitPattern": [217.343988],
+  "interstitialResumeOffset": 217.343988
+}

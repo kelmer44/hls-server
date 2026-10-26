@@ -21,6 +21,31 @@ npm run generate
 npm start
 ```
 
+## Reproducing a live join while skipping past ads
+
+Start the long-break profile instead of the normal server (stop the existing server on port 8765 first):
+
+```sh
+npm run start:live-join
+```
+
+No media regeneration is needed if `public/media/` already exists. The profile uses the same `/live.m3u8` URL and existing audio clips:
+
+- Each break contains 36 broadcast segments, totaling **217.343988 seconds** (about 3 minutes 37 seconds).
+- Each of the two replacement assets contains 18 six-second segments, totaling 108.671994 seconds per asset. Actual playlist durations match the advertised asset durations. Discontinuities separate repeated clips with independent timestamps.
+- `PLANNED-DURATION`, `X-PLAYOUT-LIMIT`, and `X-RESUME-OFFSET` are all 217.343988 seconds, avoiding the short playout-limit cases in the regular config.
+- The sliding window contains 96 segments, about **579.584 seconds**, so historical breaks remain visible. Markers are retained for breaks that start before the window but still overlap it.
+- On startup, the prefilled window includes completed historical breaks and an ongoing break. Content separates breaks by only three segments, so most joins land during a break.
+
+In the Media3 demo, open `http://10.0.2.2:8765/live.m3u8` (standard emulator) or the printed LAN URL (physical device/Charles). Use a fresh player for each attempt so its initial-join synchronization runs again. Leave the demo's existing `setWithSkippedAdGroup()` logic enabled.
+
+Compare the initial `window.defaultPositionUs`, the position after `DISCONTINUITY_REASON_SKIP`, the window duration, and buffered duration. A jump beyond the available window followed by persistent buffering reproduces the suspected problem; large breaks alone do not prove the bug. Request logs identify the selected `ad-break-N` and asset-list request. Save the manifest and player logs around the same join.
+
+`npm start` continues to use the original short-break/playout-limit profile in `config.json`. Restart the server when switching profiles. Two additional settings are available in either profile:
+
+- `adSegmentRepeats` (default `1`, environment `AD_SEGMENT_REPEATS`): number of repetitions of each ad clip in a break. A break contains twice this number of segments.
+- `playlistWindowSegments` (default `16`, environment `PLAYLIST_WINDOW_SEGMENTS`): number of segments retained in the live window. Choose a window longer than a break to retain completed historical opportunities.
+
 Runtime config is read from `config.json` by default. The loader accepts `//` and `/* ... */` comments (JSONC); trailing commas are not supported:
 
 ```json
