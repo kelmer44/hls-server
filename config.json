@@ -4,8 +4,18 @@
   // "port": 8765,
   // "logRequests": false,
 
+  // Cycle through chunks 1..maxUsableChunks (1 to 48). Default: 6.
+  "maxUsableChunks": 12,
+
+  // Content chunks before each two-ad break. Default: 3.
+  // Use 24 for ~145 seconds of content, beyond a 90-second prefetch buffer.
+  "chunksBetweenAdBreaks": 6,
+
   // Emit prefetch dateranges before each break. Default: false.
   "prefetchDateRanges": true,
+
+  // Chunks before the break to place its prefetch marker. Default: 1 (~6 seconds).
+  "prefetchChunksBeforeBreak": 4,
 
   // Number of ads per successive break (1 or 2). Default: [2].
   // Keep [2] for playout-limit tests; [2, 1] alternates two-ad and one-ad breaks.
@@ -17,7 +27,8 @@
 
   // Total interstitial playback budget in seconds, cycling across breaks.
   // Default: [12.074666] (both full ads). Here: cut ad 1, cut ad 2, full control.
-  "interstitialPlayoutLimitPattern": [3, 8, 12.074666],
+  // "interstitialPlayoutLimitPattern": [3, 8, 12.074666],
+  "interstitialPlayoutLimitPattern": [12.074666],
 
   // Seconds of primary audio to skip at the break, independent of ad playback.
   // Default: omitted or null (player calculates the resume position).

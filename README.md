@@ -12,7 +12,7 @@ The main playlist is a sliding live playlist at `/live.m3u8`. It loops content s
 - `X-SNAP="OUT,IN"` so interstitial playback snaps out of and back into the primary stream
 - `X-TIMELINE-OCCUPIES="RANGE"`, `X-TIMELINE-STYLE="HIGHLIGHT"`, and `X-CONTENT-MAY-VARY="YES"`
 
-Optional prefetch `EXT-X-DATERANGE` tags can be enabled with `PREFETCH_DATERANGES=1`. These tags are emitted before the segment immediately preceding each break and use `X-PREFETCH-DURATION` and `X-PREFETCH-ID` to mirror the marker shape used by production live streams.
+Optional prefetch `EXT-X-DATERANGE` tags can be enabled with `PREFETCH_DATERANGES=1`. These tags are emitted before the segment selected by `prefetchChunksBeforeBreak` and use `X-PREFETCH-DURATION` and `X-PREFETCH-ID` to mirror the marker shape used by production live streams.
 
 ## Run
 
@@ -25,13 +25,32 @@ Runtime config is read from `config.json` by default. The loader accepts `//` an
 
 ```json
 {
+  "maxUsableChunks": 6,
+  "chunksBetweenAdBreaks": 3,
   "prefetchDateRanges": true,
+  "prefetchChunksBeforeBreak": 1,
   "interstitialAdCountPattern": [2],
   "interstitialAdOrderPattern": [[1, 2]],
   "interstitialPlayoutLimitPattern": [3, 8, 12.074666],
   "interstitialResumeOffset": 12.074666
 }
 ```
+
+`maxUsableChunks` selects how many numbered content chunks to cycle through (1–48, default 6). `chunksBetweenAdBreaks` sets the number of content chunks between each pair of broadcast ads (a positive integer, default 3). The counters are independent: chunk numbering wraps without resetting the ad cadence, even when the settings do not divide evenly. Ads always remain two broadcast segments per break.
+
+`prefetchChunksBeforeBreak` sets how many stream chunks before its break a prefetch marker starts (a positive integer, default 1). Each chunk is 6.037333 seconds, so `1` is about 6 seconds before the break and `3` is about 18 seconds. The marker's `END-DATE` remains the break start, and `X-PREFETCH-DURATION` remains the ad break duration. The offset counts all stream segments, including any earlier broadcast ads. Environment override: `PREFETCH_CHUNKS_BEFORE_BREAK=3`. Restart the server after changing it.
+
+The defaults produce `chunk1–chunk2–chunk3–ad1–ad2–chunk4–chunk5–chunk6–ad1–ad2`, repeating. To observe prefetch with a 90-second buffer, try:
+
+```json
+{
+  "maxUsableChunks": 48,
+  "chunksBetweenAdBreaks": 24,
+  "prefetchDateRanges": true
+}
+```
+
+This gives about 145 seconds of content between breaks. Each chunk lasts about 6.037 seconds; use at least 15 chunks to exceed 90 seconds. The settings also accept environment overrides: `MAX_USABLE_CHUNKS=48 CHUNKS_BETWEEN_AD_BREAKS=24 npm start`. Generate media once to create all 48 numbered chunks, then restart the server after changing config; no regeneration is needed when changing either setting.
 
 `interstitialAdCountPattern` controls how many interstitial ads are returned for each break. `[1, 2]` alternates one-ad and two-ad breaks. Use `[2]` to keep both assets available when testing playout limits. The asset durations and `PLANNED-DURATION` do not change when the limit changes.
 
@@ -107,7 +126,7 @@ http://127.0.0.1:8765/
 
 - Media generation uses local `say` and `ffmpeg`.
 - All media is audio-only AAC in MPEG-TS containers.
-- The live playlist advances by wall clock time and keeps a 16-segment window, currently about 96.6 seconds. The ad cadence puts at least three ad breaks in the live window after startup.
+- The live playlist advances by wall clock time and keeps a 16-segment window, about 96.6 seconds. The number of visible breaks depends on `chunksBetweenAdBreaks`; longer intervals can leave the window with no breaks.
 - Upcoming interstitials are advertised four segments before the break, which is enough lead time for players that resolve asset lists about three target durations ahead.
 - Broadcast ad assets are grouped into one ad break, so supported players should replace `broadcast-ad-1.ts` and `broadcast-ad-2.ts` with the `.m3u8` playlists returned by the asset-list endpoint.
-- Generated segments speak their chunk name first, then use a unique sine tone for the rest of the chunk.
+- All 48 generated content segments speak their chunk number first, then use a unique sine tone for the rest of the chunk, alternating low and high frequencies so consecutive chunks are easy to distinguish.

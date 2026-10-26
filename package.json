@@ -8,6 +8,7 @@
   },
   "scripts": {
     "generate": "node scripts/generate-media.js",
+    "test": "node --test",
     "start": "node server.js"
   },
   "dependencies": {

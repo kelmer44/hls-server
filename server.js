@@ -4,17 +4,25 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createContentSchedule } from "./content-schedule.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const hlsJsPath = path.join(__dirname, "node_modules", "hls.js", "dist", "hls.min.js");
 const configPath = path.resolve(process.env.CONFIG_PATH || path.join(__dirname, "config.json"));
 const config = loadConfig(configPath);
+const contentSchedule = createContentSchedule({
+  maxUsableChunks: process.env.MAX_USABLE_CHUNKS ?? config.maxUsableChunks,
+  chunksBetweenAdBreaks: process.env.CHUNKS_BETWEEN_AD_BREAKS ?? config.chunksBetweenAdBreaks
+});
 
 const host = process.env.HOST || config.host || "0.0.0.0";
 const port = Number(process.env.PORT || config.port || 8765);
 const logRequests = parseBooleanConfig(process.env.REQUEST_LOG, config.logRequests === true);
 const prefetchDateRangesEnabled = parseBooleanConfig(process.env.PREFETCH_DATERANGES, config.prefetchDateRanges === true);
+const prefetchChunksBeforeBreak = parsePrefetchChunksBeforeBreak(
+  process.env.PREFETCH_CHUNKS_BEFORE_BREAK ?? config.prefetchChunksBeforeBreak
+);
 const segmentDuration = 6.037333;
 const adBreakSegments = 2;
 const adBreakDuration = segmentDuration * adBreakSegments;
@@ -37,26 +45,6 @@ const interstitialResumeOffset = parseOptionalResumeOffset(
   process.env.INTERSTITIAL_RESUME_OFFSET ?? config.interstitialResumeOffset
 );
 const shimDuration = 12.010667;
-
-const loop = [
-  { type: "content", file: "content-1.ts" },
-  { type: "content", file: "content-2.ts" },
-  { type: "content", file: "content-3.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
-  { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 },
-  { type: "content", file: "content-4.ts" },
-  { type: "content", file: "content-5.ts" },
-  { type: "content", file: "content-6.ts" },
-  { type: "broadcast-ad", file: "broadcast-ad-1.ts", adBreakPosition: 0 },
-  { type: "broadcast-ad", file: "broadcast-ad-2.ts", adBreakPosition: 1 }
-];
-
-const adBreakStartOffsets = loop.reduce((offsets, item, index) => {
-  if (item.type === "broadcast-ad" && item.adBreakPosition === 0) {
-    offsets.push(index);
-  }
-  return offsets;
-}, []);
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -116,6 +104,15 @@ function parseBooleanConfig(value, fallback = false) {
     return false;
   }
   return fallback;
+}
+
+function parsePrefetchChunksBeforeBreak(value) {
+  if (value === undefined || value === null) return 1;
+  const chunks = Number(value);
+  if (typeof value === "boolean" || !Number.isSafeInteger(chunks) || chunks < 1) {
+    throw new Error("prefetchChunksBeforeBreak must be a positive integer.");
+  }
+  return chunks;
 }
 
 function parseInterstitialAdCountPattern(value) {
@@ -190,7 +187,7 @@ function adBreakStartSequenceFromId(interstitialId) {
 }
 
 function adBreakStartForSequence(sequence) {
-  const item = loop[sequence % loop.length];
+  const item = contentSchedule.itemForSequence(sequence);
   if (item.type !== "broadcast-ad") {
     return null;
   }
@@ -198,12 +195,7 @@ function adBreakStartForSequence(sequence) {
 }
 
 function adBreakOrdinal(adBreakStartSequence) {
-  const offset = adBreakStartSequence % loop.length;
-  const offsetIndex = adBreakStartOffsets.indexOf(offset);
-  if (offsetIndex === -1) {
-    return 0;
-  }
-  return Math.floor(adBreakStartSequence / loop.length) * adBreakStartOffsets.length + offsetIndex;
+  return contentSchedule.adBreakOrdinal(adBreakStartSequence);
 }
 
 function interstitialAssetsForBreak(adBreakStartSequence) {
@@ -216,7 +208,7 @@ function interstitialAssetsForBreak(adBreakStartSequence) {
 
 function prefetchDateRange(adBreakStartSequence) {
   const adBreakStartMs = startedAtMs + adBreakStartSequence * segmentDuration * 1000;
-  const prefetchStartMs = adBreakStartMs - segmentDuration * 1000;
+  const prefetchStartMs = adBreakStartMs - prefetchChunksBeforeBreak * segmentDuration * 1000;
   const id = `ad-break-${adBreakStartSequence}`;
   const prefetchId = `prefetch_${id}`;
   return `#EXT-X-DATERANGE:ID="${quote(prefetchId)}",START-DATE="${isoAt(prefetchStartMs)}",END-DATE="${isoAt(adBreakStartMs)}",X-PREFETCH-DURATION="${formatDuration(adBreakDuration)}",X-PREFETCH-ID="${quote(id)}"`;
@@ -260,7 +252,7 @@ function livePlaylist(baseUrl) {
   const advertisedInterstitials = new Set(interstitialStartSequences(firstSeq, elapsedSegments));
 
   for (let sequence = firstSeq; sequence <= elapsedSegments; sequence += 1) {
-    const item = loop[sequence % loop.length];
+    const item = contentSchedule.itemForSequence(sequence);
     const startMs = startedAtMs + sequence * segmentDuration * 1000;
     const nextSequence = sequence + 1;
     const nextInterstitialStartSequence = advertisedInterstitials.has(nextSequence) ? nextSequence : null;
@@ -269,8 +261,9 @@ function livePlaylist(baseUrl) {
       lines.push(interstitialDateRange(baseUrl, sequence));
     }
 
-    if (prefetchDateRangesEnabled && nextInterstitialStartSequence !== null) {
-      lines.push(prefetchDateRange(nextInterstitialStartSequence));
+    const prefetchBreakSequence = sequence + prefetchChunksBeforeBreak;
+    if (prefetchDateRangesEnabled && adBreakStartForSequence(prefetchBreakSequence) === prefetchBreakSequence) {
+      lines.push(prefetchDateRange(prefetchBreakSequence));
     }
     lines.push(`#EXT-X-PROGRAM-DATE-TIME:${isoAt(startMs)}`);
     if (sequence > firstSeq) {
@@ -465,7 +458,11 @@ const server = createServer(async (req, res) => {
   }
 });
 
-if (!existsSync(path.join(publicDir, "media", "content-1.ts"))) {
+const requiredMedia = [
+  ...Array.from({ length: contentSchedule.maxUsableChunks }, (_, index) => `content-${index + 1}.ts`),
+  "broadcast-ad-1.ts", "broadcast-ad-2.ts", ...interstitialAssets, "shim.ts"
+];
+if (requiredMedia.some((file) => !existsSync(path.join(publicDir, "media", file)))) {
   console.error("Missing generated media. Run: npm run generate");
   process.exit(1);
 }
@@ -480,6 +477,7 @@ server.listen(port, host, () => {
   console.log(`Preview page:          http://${displayHost}:${port}/`);
   console.log(`Config file:           ${existsSync(configPath) ? configPath : "not found"}`);
   console.log(`Prefetch dateranges:   ${prefetchDateRangesEnabled ? "enabled" : "disabled"}`);
+  console.log(`Content chunks:       ${contentSchedule.maxUsableChunks} before repeating; ${contentSchedule.chunksBetweenAdBreaks} between ad breaks (${formatDuration(contentSchedule.chunksBetweenAdBreaks * segmentDuration)} seconds)`);
   console.log(`Interstitial ad count pattern: ${interstitialAdCountPattern.join(",")}`);
   console.log(`Interstitial ad order pattern: ${JSON.stringify(interstitialAdOrderPattern)}`);
   console.log(`Interstitial playout limits (seconds): ${interstitialPlayoutLimitPattern.join(",")}`);

@@ -2,6 +2,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { availableContentChunks } from "../content-schedule.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -12,12 +13,12 @@ const segmentDuration = 6;
 const toneLeadInSeconds = 0.08;
 
 const clips = [
-  { name: "content-1", phrase: "Chunk 1.", toneHz: 440 },
-  { name: "content-2", phrase: "Chunk 2.", toneHz: 494 },
-  { name: "content-3", phrase: "Chunk 3.", toneHz: 523 },
-  { name: "content-4", phrase: "Chunk 4.", toneHz: 587 },
-  { name: "content-5", phrase: "Chunk 5.", toneHz: 659 },
-  { name: "content-6", phrase: "Chunk 6.", toneHz: 698 },
+  // Unique tones alternate low/high registers, including the 48 -> 1 wrap.
+  ...Array.from({ length: availableContentChunks }, (_, index) => ({
+    name: `content-${index + 1}`,
+    phrase: `Chunk ${index + 1}.`,
+    toneHz: index % 2 === 0 ? 220 + Math.floor(index / 2) * 20 : 880 + Math.floor(index / 2) * 35
+  })),
   { name: "broadcast-ad-1", phrase: "Broadcast ad 1.", toneHz: 784 },
   { name: "broadcast-ad-2", phrase: "Broadcast ad 2.", toneHz: 831 },
   { name: "interstitial-1", phrase: "Interstitial ad 1.", toneHz: 880 },
